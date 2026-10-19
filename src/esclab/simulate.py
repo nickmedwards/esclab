@@ -1553,7 +1553,7 @@ class Model:
             bar_width = 30
             n_fill = min(bar_width, max(0, int((percent / 100.0) * bar_width)))
             bar = '█' * n_fill + '-' * (bar_width - n_fill)
-            line = f'[{bar}] {percent:5.1f}% | Sim {self.time:.1f}s | Clock {now_clock - self._start_time_wall_clock:.1f}s'
+            line = f'[{bar}] {percent:5.1f}% | Sim {self.time:.1f}s | Clock {now_clock - self._start_time_wall_clock:.3f}s'
             pad = max(0, self._last_progress_line_len - len(line))
             sys.stdout.write('\r' + line + (' ' * pad))
             sys.stdout.flush()
