@@ -117,6 +117,46 @@ You can also assign `Model.Settings.global_plotter_args` before creating models
 to set class defaults. Each new model receives an independent copy of that
 dictionary. Changes to a model's settings affect subsequently added plotters.
 
+Appearance options work in `global_plotter_args`, `add_plotter`,
+`add_plotter_simstats`, and directly in `OnlinePlotter`:
+
+```python
+model.settings.global_plotter_args.update(
+    font_size=12, font_color="black", bg_color="white",
+    line_weights=2, line_styles="--", line_colors="tab:blue",
+)
+model.add_plotter(
+    [model.storage.charge], [model.storage.flow_in],
+    line_weights=[[3], [1]], line_styles=[["s--"], [":"]],
+    line_colors=[["tab:red"], ["#377eb8"]],
+)
+```
+
+`font_size` sets the initial size in points for ticks, axis labels, legends,
+and plot tooltips. The font buttons continue to adjust all plots, preserving
+their initial size differences. `font_color` sets axis, legend, and tooltip text colors;
+`bg_color` sets the plot background. Colors accept Matplotlib names, hex strings,
+or RGB(A) tuples. For `line_weights`, `line_styles`, and `line_colors`, a scalar
+or single-entry list applies to every series. Supply either a flat list ordered
+by `y1` first, then `y2`, or nested `[[y1 values], [y2 values]]` lists matching
+each axis's series count (the groups may have different lengths). Use an empty
+second group when there are no `y2` series. Use RGB(A) tuples for individual
+colors within these lists. Styles accept Matplotlib format strings, including
+`"--"`, `":"`, `"-."`, `"s--"`, and marker-only `"o"`. Explicit `line_colors`
+override colors embedded in format strings. `None` restores the default palette
+or styles (solid for `y1`, dashed for `y2`); the default width is 2.
+
+Grid options also work through direct keywords and global defaults. All three
+default to `True`: `grid` enables the grid overall, `grid_horizontal` enables
+horizontal lines, and `grid_vertical` enables vertical lines. `grid=False`
+hides both directions regardless of the directional settings.
+
+```python
+model.settings.global_plotter_args.update(grid=True, grid_vertical=False)
+model.add_plotter([model.storage.charge])  # horizontal grid only
+model.add_plotter([model.storage.flow_in], grid=False)  # no grid
+```
+
 Definitions:
 | Term               | Definition                                                                                                                       |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------- |

@@ -578,6 +578,15 @@ class Model:
         'show_live': True,
         'time_units': 'sec',
         'plotter_size': (0.9, 0.9),
+        'font_size': None,
+        'font_color': '#c0c0c0',
+        'bg_color': None,
+        'line_weights': 2,
+        'line_styles': None,
+        'line_colors': None,
+        'grid': True,
+        'grid_horizontal': True,
+        'grid_vertical': True,
     }
 
     def _resolve_plotter_args(self, explicit_args, *, simstats=False):
@@ -641,7 +650,10 @@ class Model:
                     y1label=_NOT_SET, y2label=_NOT_SET,
                     nmax_points=_NOT_SET, update_every=_NOT_SET,
                     tab_title=_NOT_SET, show_live=_NOT_SET,
-                    time_units=_NOT_SET, plotter_size=_NOT_SET):
+                    time_units=_NOT_SET, plotter_size=_NOT_SET, *,
+                    font_size=_NOT_SET, font_color=_NOT_SET, bg_color=_NOT_SET,
+                    line_weights=_NOT_SET, line_styles=_NOT_SET, line_colors=_NOT_SET,
+                    grid=_NOT_SET, grid_horizontal=_NOT_SET, grid_vertical=_NOT_SET):
         """
         Add a plotter to the model to visualize component inputs and outputs over time.
 
@@ -679,12 +691,27 @@ class Model:
         plotter_size : tuple, optional
             Window size as fractions of the screen or pixel dimensions.
             Default is (0.9, 0.9).
+        font_size : float, optional
+            Initial plot font size in points. Font buttons adjust this size.
+        font_color, bg_color : color, optional
+            Plot text and background colors; accept Matplotlib colors.
+        line_weights, line_styles, line_colors : scalar or list, optional
+            Line widths, Matplotlib format strings (e.g. 's--'), and colors.
+            Supply a flat list ordered y1 then y2, or nested [y1 values,
+            y2 values] lists matching each axis's series count. Scalars or
+            single-entry lists apply to every series. None restores defaults.
+        grid, grid_horizontal, grid_vertical : bool, optional
+            Show the grid and its horizontal/vertical lines (all default True).
+            Setting grid=False hides both directions.
         """
         options = self._resolve_plotter_args(dict(
             y1lim=y1lim, y2lim=y2lim, y1label=y1label, y2label=y2label,
             nmax_points=nmax_points, update_every=update_every,
             tab_title=tab_title, show_live=show_live, time_units=time_units,
             plotter_size=plotter_size,
+            font_size=font_size, font_color=font_color, bg_color=bg_color,
+            line_weights=line_weights, line_styles=line_styles, line_colors=line_colors,
+            grid=grid, grid_horizontal=grid_horizontal, grid_vertical=grid_vertical,
         ))
         self._add_plotter(y1, y2, options)
 

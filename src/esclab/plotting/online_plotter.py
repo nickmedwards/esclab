@@ -2,6 +2,9 @@ import numpy as np
 import pyqtgraph as qtg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import time
+from matplotlib.axes._base import _process_plot_format
+from matplotlib.colors import is_color_like, to_rgba
+from matplotlib.markers import MarkerStyle
 
 
 class _AxisLockedViewBox(qtg.ViewBox):
@@ -364,7 +367,7 @@ class OnlinePlotter:
     y2 | [d, e, f, ...] component input or output values to be plotted on axis 2
     """
 
-    def __init__(self, y1, y2, y1lim, y2lim, y1label, y2label, nmax_points, update_every, plotter_size=(0.9, 0.9), tab_title=None, show_live=True, time_units='sec'):
+    def __init__(self, y1, y2, y1lim, y2lim, y1label, y2label, nmax_points, update_every, plotter_size=(0.9, 0.9), tab_title=None, show_live=True, time_units='sec', *, font_size=None, font_color='#c0c0c0', bg_color=None, line_weights=2, line_styles=None, line_colors=None, grid=True, grid_horizontal=True, grid_vertical=True):
         """Plot time supplied in seconds using the selected display units.
 
         time_units must be nsec, msec, sec (default), min, hr, day, week,
@@ -393,6 +396,21 @@ class OnlinePlotter:
         self._y2lim = y2lim
         self._plotter_size = plotter_size
         self._tab_title = tab_title
+        self.grid = grid
+        self.grid_horizontal = grid_horizontal
+        self.grid_vertical = grid_vertical
+        if font_size is not None and (not np.isfinite(font_size) or font_size <= 0):
+            raise ValueError('font_size must be a positive finite number')
+        self._initial_font_size = font_size
+        self._font_size_baseline = OnlinePlotter.font_size_pt
+        self.font_color = self._color(font_color)
+        self.bg_color = None if bg_color is None else self._color(bg_color)
+        nseries = len(y1) + (len(y2) if y2 is not None else 0)
+        self.line_weights = self._series_options(line_weights, nseries, 'line_weights')
+        self.line_styles = self._series_options(line_styles, nseries, 'line_styles')
+        self.line_colors = self._series_options(line_colors, nseries, 'line_colors')
+        # Validate before creating windows, including for deferred plotters.
+        self._line_options = [self._make_line_options(i) for i in range(nseries)]
         self._timestep = 1.0
 
         # Pre-allocated numpy buffers, doubled on overflow; the initial size is
@@ -404,6 +422,64 @@ class OnlinePlotter:
         else:
             self.y1_lines = []
             self.y2_lines = []
+
+    @staticmethod
+    def _color(value):
+        if isinstance(value, QtGui.QColor):
+            return QtGui.QColor(value)
+        return QtGui.QColor.fromRgbF(*to_rgba(value))
+
+    def _series_options(self, value, count, name):
+        # Tuples represent scalar RGB(A) colors; lists represent series options.
+        if isinstance(value, (list, np.ndarray)):
+            value = list(value)
+            nested = any(isinstance(item, (list, np.ndarray)) and
+                         not (name == 'line_colors' and is_color_like(item))
+                         for item in value)
+            if nested:
+                counts = (len(self.y1_items), len(self.y2_items or []))
+                if len(value) != 2 or any(
+                    not isinstance(group, (list, np.ndarray)) or len(group) != size
+                    for group, size in zip(value, counts)
+                ):
+                    raise ValueError(f'{name} axis groups must contain {counts[0]} y1 '
+                                     f'and {counts[1]} y2 values')
+                value = [item for group in value for item in group]
+            elif len(value) == 1:
+                return value * count
+            if len(value) != count:
+                raise ValueError(f'{name} must contain exactly {count} values (y1 then y2)')
+            return value
+        return [value] * count
+
+    def _make_line_options(self, index):
+        palette = ['#377eb8', '#ff7f00', '#4daf4a', '#f781bf', '#a65628',
+                   '#984ea3', '#999999', '#e41a1c', '#dede00', '#00ffe5', '#5d0ab6']
+        width = self.line_weights[index]
+        if width is None:
+            width = 2
+        if not np.isfinite(width) or width < 0:
+            raise ValueError('line_weights must be finite nonnegative numbers')
+        fmt = self.line_styles[index]
+        if fmt is None:
+            style, marker, fmt_color = ('-' if index < len(self.y1_items) else '--'), None, None
+        else:
+            # Reuse Matplotlib's format grammar, including marker/color combinations.
+            style, marker, fmt_color = _process_plot_format(fmt)
+        styles = {'-': QtCore.Qt.SolidLine, '--': QtCore.Qt.DashLine,
+                  ':': QtCore.Qt.DotLine, '-.': QtCore.Qt.DashDotLine}
+        color = self.line_colors[index]
+        color = self._color(color if color is not None else
+                            fmt_color if fmt_color is not None else palette[index % len(palette)])
+        pen = None if style in (None, 'None', '', ' ') else qtg.mkPen(color, width=float(width), style=styles[style])
+        symbol = None
+        if marker not in (None, 'None', '', ' '):
+            mpl_marker = MarkerStyle(marker)
+            path = mpl_marker.get_path().transformed(mpl_marker.get_transform())
+            symbol = QtGui.QPainterPath()
+            for polygon in path.to_polygons(closed_only=False):
+                symbol.addPolygon(QtGui.QPolygonF([QtCore.QPointF(float(x), float(-y)) for x, y in polygon]))
+        return dict(pen=pen, symbol=symbol, symbolPen=qtg.mkPen(color), symbolBrush=qtg.mkBrush(color), symbolSize=7)
 
     @staticmethod
     def _normalize_item(item, axis_label, index):
@@ -426,23 +502,12 @@ class OnlinePlotter:
 
     def _build_widgets(self):
         """Create all Qt plot widgets and register this plotter in the shared window."""
-        colors = [
-            "#377eb8",
-            "#ff7f00",
-            "#4daf4a",
-            "#f781bf",
-            "#a65628",
-            "#984ea3",
-            "#999999",
-            "#e41a1c",
-            "#dede00",
-            "#00ffe5",
-            "#5d0ab6",
-        ]
         OnlinePlotter.build_window(plotter_size=self._plotter_size)
         self.app = OnlinePlotter.app
 
         self.win = qtg.GraphicsLayoutWidget()
+        if self.bg_color is not None:
+            self.win.setBackground(self.bg_color)
         OnlinePlotter.n_plotters += 1
         tab_label = self._tab_title if self._tab_title not in [None, ""] else self.y1label if self.y1label not in [None, ""] else f"Plot {OnlinePlotter.n_plotters}"
         OnlinePlotter.tab_widget.addTab(self.win, tab_label)
@@ -453,7 +518,8 @@ class OnlinePlotter:
         self.legend_y1 = self.ax1.addLegend(offset=(10, 10))
         self.legend_y1.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 40)))
         self.legend_y2 = None
-        self.ax1.showGrid(x=True, y=True, alpha=0.3)
+        self.ax1.showGrid(x=self.grid and self.grid_vertical,
+                          y=self.grid and self.grid_horizontal, alpha=0.3)
         # pyqtgraph's built-in autoscale button only fits the currently-loaded
         # window of data, not the full history; use the "Fit All" button instead.
         self.ax1.hideButtons()
@@ -472,8 +538,7 @@ class OnlinePlotter:
         self.y1_lines = []
         c = 0
         for i in range(len(self.y1_items)):
-            pen = qtg.mkPen(color=colors[c % len(colors)], width=2)
-            line = self.ax1.plot([], [], pen=pen, name=self.y1_items[i].name)
+            line = self.ax1.plot([], [], name=self.y1_items[i].name, **self._line_options[c])
             self.y1_lines.append(line)
             c += 1
 
@@ -500,8 +565,7 @@ class OnlinePlotter:
             self.ax1.vb.sigResized.connect(updateViews)
 
             for i in range(len(self.y2_items)):
-                pen = qtg.mkPen(color=colors[c % len(colors)], width=2, style=QtCore.Qt.DashLine)
-                line = qtg.PlotDataItem([], [], pen=pen, name=self.y2_items[i].name)
+                line = qtg.PlotDataItem([], [], name=self.y2_items[i].name, **self._line_options[c])
                 self.ax2.addItem(line)
                 self.legend_y2.addItem(line, self.y2_items[i].name)
                 self.y2_lines.append(line)
@@ -559,11 +623,23 @@ class OnlinePlotter:
         if target not in cls.font_targets:
             cls.font_targets.append(target)
 
+    @property
+    def plot_font_size(self):
+        if self._initial_font_size is None:
+            return OnlinePlotter.font_size_pt
+        return max(1, self._initial_font_size + OnlinePlotter.font_size_pt - self._font_size_baseline)
+
     def apply_font_size(self):
+        size = self.plot_font_size
         tick_font = QtGui.QFont()
-        tick_font.setPointSize(OnlinePlotter.font_size_pt)
-        label_color = "#c0c0c0"
-        label_style = {"font-size": f"{OnlinePlotter.font_size_pt + 2}pt"}
+        tick_font.setPointSizeF(size)
+        label_color = self.font_color.name(QtGui.QColor.HexArgb)
+        label_style = {"font-size": f"{size}pt"}
+
+        for name in ('left', 'bottom', 'right', 'top'):
+            axis = self.ax1.getAxis(name)
+            axis.setTextPen(self.font_color)
+            axis.setPen(self.font_color)
 
         left_axis = self.ax1.getAxis("left")
         bottom_axis = self.ax1.getAxis("bottom")
@@ -575,11 +651,11 @@ class OnlinePlotter:
 
         if self.legend_y1 is not None:
             label_font = self.legend_y1.font()
-            label_font.setPointSize(OnlinePlotter.font_size_pt)
+            label_font.setPointSizeF(size)
             self.legend_y1.setFont(label_font)
 
             for _, label_item in self.legend_y1.items:
-                label_item.setText(label_item.text, size=f"{OnlinePlotter.font_size_pt}pt")
+                label_item.setText(label_item.text, size=f"{size}pt", color=self.font_color)
 
         if self.y2_items is not None:
             right_axis = self.ax1.getAxis("right")
@@ -588,7 +664,7 @@ class OnlinePlotter:
 
             if self.legend_y2 is not None:
                 for _, label_item in self.legend_y2.items:
-                    label_item.setText(label_item.text, size=f"{OnlinePlotter.font_size_pt}pt")
+                    label_item.setText(label_item.text, size=f"{size}pt", color=self.font_color)
 
     @staticmethod
     def _fraction_to_brush(f):
@@ -774,8 +850,10 @@ class OnlinePlotter:
         self._plot_tooltip_enabled = False
         self._tip_label = QtWidgets.QLabel()
         self._tip_label.setWindowFlags(QtCore.Qt.ToolTip | QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+        tooltip_bg = self.win.backgroundBrush().color().name()
         self._tip_label.setStyleSheet(
-            "QLabel { background-color: #ffffdc; color: #000000; border: 1px solid #aaaaaa; padding: 4px 8px; }"
+            f"QLabel {{ background-color: {tooltip_bg}; color: {self.font_color.name()}; "
+            "border: 1px solid #aaaaaa; padding: 4px 8px; }"
         )
         self._tip_label.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
         self._tip_label.hide()
@@ -848,7 +926,9 @@ class OnlinePlotter:
                 lines.append(f"{item.name:<{ncmax}s} | {axis_values[idx]:.4g}{unit_str}")
             text = "\n".join(lines)
 
-        self._tip_label.setFont(QtGui.QFont("Consolas", OnlinePlotter.font_size_pt-2))
+        tooltip_font = QtGui.QFont('Consolas')
+        tooltip_font.setPointSizeF(self.plot_font_size)
+        self._tip_label.setFont(tooltip_font)
         self._tip_label.setText(text)
         self._tip_label.adjustSize()
         self._tip_label.show()
