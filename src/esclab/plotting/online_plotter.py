@@ -55,6 +55,39 @@ class _FillLegendSample(qtg.ItemSample):
         painter.drawRect(QtCore.QRectF(2, 5, 16, 10))
 
 
+class _SeriesGroup:
+    """Expose a group of realization lines as one legend sample."""
+
+    def __init__(self, lines):
+        self.lines = lines
+        self.opts = lines[0].opts
+
+    def isVisible(self):
+        return any(line.isVisible() for line in self.lines)
+
+    def setVisible(self, visible):
+        for line in self.lines:
+            line.setVisible(visible)
+
+
+class _ToggleLegend(qtg.LegendItem):
+    """Give labels the same visibility toggle as their clickable swatches."""
+
+    def addItem(self, item, name):
+        super().addItem(item, name)
+        sample, label = self.items[-1]
+        label.setAcceptedMouseButtons(QtCore.Qt.LeftButton)
+        label.item.setAcceptedMouseButtons(QtCore.Qt.NoButton)
+        label.setCursor(QtCore.Qt.PointingHandCursor)
+        label.mouseClickEvent = sample.mouseClickEvent
+
+        def update_label(_item=None):
+            label.setOpacity(1.0 if sample.item.isVisible() else 0.4)
+
+        sample.sigClicked.connect(update_label)
+        update_label()
+
+
 class OnlinePlotter:
     app = None
     main_window = None
@@ -576,7 +609,9 @@ class OnlinePlotter:
         self.ax1 = self.win.addPlot(viewBox=_AxisLockedViewBox())
         self.ax1.setLabel("bottom", f"Time ({self.time_units})")
         self.ax1.setLabel("left", self.y1label)
-        self.legend_y1 = self.ax1.addLegend(offset=(10, 10))
+        self.legend_y1 = _ToggleLegend(offset=(10, 10))
+        self.legend_y1.setParentItem(self.ax1.vb)
+        self.ax1.legend = self.legend_y1
         self.legend_y1.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 40)))
         self.legend_y2 = None
         self.ax1.showGrid(x=self.grid and self.grid_vertical,
@@ -611,7 +646,7 @@ class OnlinePlotter:
             self.ax1.getAxis("right").linkToView(self.ax2)
             self.ax2.setXLink(self.ax1)
             self.ax1.getAxis("right").setLabel(self.y2label, color="#c0c0c0")
-            self.legend_y2 = qtg.LegendItem(offset=(-10, 10))
+            self.legend_y2 = _ToggleLegend(offset=(-10, 10))
             self.legend_y2.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 40)))
             self.legend_y2.setParentItem(self.ax1.vb)
 
@@ -921,6 +956,9 @@ class OnlinePlotter:
                 if config['mode'] != 'spaghetti':
                     legend.addItem(line, f'{item.name}[{member}]')
                 member_lines.append((member, line))
+            if config['mode'] == 'spaghetti' and member_lines:
+                group = _SeriesGroup([line for _, line in member_lines])
+                legend.addItem(qtg.ItemSample(group), f'{item.name} realizations')
             bounds = None
             if config['mode'] == 'fill_between':
                 # PlotDataItem skips updating its curve when pen=None, leaving
@@ -972,38 +1010,47 @@ class OnlinePlotter:
         x_view = self.x_data[:n]
         self.ax1.setXRange(x_view[0], x_view[n - 1], padding=0.02)
 
-        y1_values = [self._plotted_values(i, a[:n]) for i, a in enumerate(self.y1_data)]
-        y1_min = min(np.nanmin(a) for a in y1_values)
-        y1_max = max(np.nanmax(a) for a in y1_values)
-        if self._y1lim is None and y1_min <= y1_max:
-            self.ax1.setYRange(y1_min, y1_max, padding=0.05)
-
-        if self.y2_items is not None and self._y2lim is None:
-            y2_values = [self._plotted_values(len(self.y1_items) + i, a[:n])
-                         for i, a in enumerate(self.y2_data)]
-            y2_min = min(np.nanmin(a) for a in y2_values)
-            y2_max = max(np.nanmax(a) for a in y2_values)
-            if y2_min <= y2_max:
-                self.ax2.setYRange(y2_min, y2_max, padding=0.05)
+        for offset, buffers, target, limits in (
+            (0, self.y1_data, self.ax1, self._y1lim),
+            (len(self.y1_items), self.y2_data, getattr(self, 'ax2', None), self._y2lim),
+        ):
+            if target is None or limits is not None:
+                continue
+            ranges = []
+            for i, buffer in enumerate(buffers):
+                values = self._plotted_values(offset + i, buffer[:n])
+                finite = values[np.isfinite(values)]
+                if finite.size:
+                    ranges.append((finite.min(), finite.max()))
+            # Preserve the Y range when every trace is hidden or nonfinite.
+            if ranges:
+                low = min(low for low, _ in ranges)
+                high = max(high for _, high in ranges)
+                if low == high:
+                    # Qt otherwise retains the previous span for flat data,
+                    # which can still reflect a now-hidden outlier.
+                    margin = max(abs(low) * 0.01, 0.5)
+                    low, high = low - margin, high + margin
+                target.setYRange(low, high, padding=0.05)
 
         self._render_visible_window()
 
     def _plotted_values(self, index, values):
         """Bounds for Fit All reflect the selected traces and statistics."""
+        lines = self.y1_lines + self.y2_lines
         if values.ndim == 1:
-            return values
+            return values if lines[index].isVisible() else np.empty(0)
         config = self.array_config[index]
         displayed = []
-        if config['show_mean']:
+        if lines[index].isVisible():
             displayed.append(values.mean(axis=1).ravel())
-        if config['mode'] == 'fill_between':
+        member_lines, bounds = self._array_artists.get(index, ([], None))
+        if bounds is not None and bounds[2].isVisible():
             displayed.append(np.percentile(values, config['percentiles'], axis=1).ravel())
-        members = config['indices']
-        if members is not None:
+        members = [member for member, line in member_lines if line.isVisible()]
+        if members:
             displayed.append(values[:, members].ravel())
-        elif config['mode'] == 'spaghetti':
-            displayed.append(values.ravel())
-        return np.concatenate(displayed)
+        return np.concatenate(displayed) if displayed else np.empty(0)
 
     def _setup_strip_tooltip(self):
         self._strip_proxy = qtg.SignalProxy(self.ax1.scene().sigMouseMoved, rateLimit=20, slot=self._on_strip_mouse_move)

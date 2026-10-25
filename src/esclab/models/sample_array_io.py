@@ -13,16 +13,18 @@ class SineSource(Component):
     signal = Component.Output()
 
     def calculate(self):
-        self.signal = self.amplitude.v * np.sin(2 * np.pi * self.model.time / self.period.v)
+        self.signal = self.amplitude * np.sin(2 * np.pi * self.model.time / self.period)
 
 
 class ArrayGain(Component):
     signal = Component.Input()
     gain = Component.Parameter(np.array([0.5, 1., 1.5]))
     result = Component.Output()
+    scatter = Component.Output()
 
     def calculate(self):
         self.result = self.gain.v * self.signal.v
+        self.scatter = -self.result + np.random.normal(0., 0.1, size=self.result.v.shape)
 
 
 def create_model(realization_count=20, show_plots=True, plot_realization=0):
@@ -39,23 +41,29 @@ def create_model(realization_count=20, show_plots=True, plot_realization=0):
     model.connect(model.source.signal, model.response.signal)
 
     if show_plots:
-        model.settings.global_plotter_args = dict(show_live=False, time_units="sec", grid=False)
-
-        # Show the middle 50% of the realizations, plus their mean.
-        model.add_plotter(model.response.result, y1label="Output",
-                          tab_title="Percentile band",
-                          array_config=dict(mode="fill_between", percentiles=(25, 75),
-                                            fill_alpha=0.4))
+        model.settings.global_plotter_args = dict(show_live=True, time_units="sec", grid=False)
 
         # Show every realization as a faint line, plus the mean.
-        model.add_plotter(model.response.result, y1label="Output",
+        model.add_plotter([model.response.result, model.response.scatter], 
+                          y1label="Output",
                           tab_title="Spaghetti",
-                          array_config=dict(mode="spaghetti", spaghetti_alpha=0.4))
+                          array_config=dict(mode="spaghetti", 
+                          spaghetti_alpha=0.4))
+
+        # Show the middle 50% of the realizations, plus their mean.
+        model.add_plotter([model.response.result, model.response.scatter], 
+                          y1label="Output",
+                          tab_title="Percentile band",
+                          array_config=dict(mode="fill_between", 
+                          percentiles=(25, 75),
+                          fill_alpha=0.4))
 
         # Select any zero-based index; a list can select several realizations.
-        model.add_plotter(model.response.result, y1label="Output",
+        model.add_plotter([model.response.result, model.response.scatter], 
+                          y1label="Output",
                           tab_title="Selected realization",
-                          array_config=dict(mode="indices", indices=[plot_realization]))
+                          array_config=dict(mode="indices", 
+                          indices=[plot_realization]))
     return model
 
 

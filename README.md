@@ -144,6 +144,14 @@ only when the tooltip moves to another timestep, using that step's values.
 Array histories retain every member, so memory use scales with steps times
 members. See `src/esclab/models/sample_array_io.py` for a simulation example.
 
+Click a legend label or its colored swatch to hide or restore that trace. Hidden
+labels are dimmed. Spaghetti plots have separate entries for the realization
+lines as a group and the mean; percentile bands and selected indices can also be
+toggled separately. These controls work during live simulation and after it
+finishes. Hidden traces continue recording data and restore their history when
+shown again. "Fit All" scales to visible traces; if an axis has no visible finite
+values, its current Y range is preserved. Explicit Y limits remain in effect.
+
 Set `model.settings.global_plotter_args` to supply defaults for all new data
 plotters, including simulation-statistics plotters. Any plotter keyword option
 except `y1` and `y2` is allowed. Explicit per-plotter values override these
