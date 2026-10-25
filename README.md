@@ -95,6 +95,52 @@ model.add_plotter([model.storage.charge], time_units="hr")
 model.add_plotter_simstats(time_units="min", show_live=False)
 ```
 
+Inputs, outputs, and parameters support NumPy arrays shaped `(m,)` or `(1, m)`
+as well as scalars. Assign arrays directly to a port or parameter and use `.v`
+to access the underlying array. Connections apply relaxation and convergence
+tolerances element by element; every element must converge. Array parameter
+defaults are independent for each component instance. The historian stores a
+copy of each array output per step, preserving its original shape. General
+`(n, m)` matrix signals are outside this vector plotting API.
+
+Array plotters default to a 5th–95th percentile envelope with the ensemble mean.
+Use `array_config` to select a mode and configure its appearance:
+
+```python
+model.add_plotter(model.source.ambient,
+    array_config={"mode": "fill_between", "percentiles": (10, 90),
+                  "fill_alpha": 0.25, "mean_width": 3})
+model.add_plotter(model.battery.grid,
+    array_config={"mode": "spaghetti", "spaghetti_alpha": 0.1,
+                  "spaghetti_width": 1, "show_mean": True})
+model.add_plotter(model.battery.soc,
+    array_config={"mode": "indices", "indices": [0, 5, 12]})
+```
+
+Percentiles use the 0–100 scale and are computed across realizations at each
+time step. Spaghetti mode draws all members by default; `indices` can limit it
+to a subset. Indices are zero based; a single integer also works. In envelope
+mode, `indices` adds selected member traces over the band. `show_mean` defaults
+to `True` for envelopes and spaghetti, and `False` for selected indices.
+Existing `line_colors`, `line_styles`, and `line_weights` configure each signal;
+member spaghetti lines use that signal's color with their own alpha and width.
+`mean_width=None` uses the signal's line weight.
+
+A single configuration dict applies to every array signal on both axes; scalar
+signals retain their usual behavior. For different configurations per signal,
+pass a list ordered as `y1` followed by `y2` (use `None` for defaults):
+
+```python
+model.add_plotter([model.building.indoor, model.source.ambient],
+    array_config=[{"mode": "fill_between", "percentiles": (5, 95)},
+                  {"mode": "indices", "indices": [0, 2]}])
+```
+
+Live and deferred plots support all modes. Each signal must keep a fixed member
+count throughout a plot's history; empty arrays and matrices raise a clear error.
+Array histories retain every member, so memory use scales with steps times
+members. See `src/esclab/models/sample_array_io.py` for a simulation example.
+
 Set `model.settings.global_plotter_args` to supply defaults for all new data
 plotters, including simulation-statistics plotters. Any plotter keyword option
 except `y1` and `y2` is allowed. Explicit per-plotter values override these
