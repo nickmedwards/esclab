@@ -1083,10 +1083,14 @@ class OnlinePlotter:
                 # which axis data are we pointing at?
                 axis_data = self.y1_data if j < len(self.y1_items) else self.y2_data
                 jj = j if j < len(self.y1_items) else j - len(self.y1_items)
-                axis_values = np.asarray(axis_data[jj], dtype=float)
-                value = axis_values[idx]
+                # Inspect only the hovered step, never the complete history.
+                value = axis_data[jj][idx]
                 if np.ndim(value):
-                    summary = f'mean {np.mean(value):.4g}; ' + np.array2string(value, precision=4, threshold=8)
+                    low, high = self.array_config[j]['percentiles']
+                    lower, upper = np.percentile(value, (low, high))
+                    summary = (f'mean {np.mean(value):.4g}; '
+                               f'p{low:g} {lower:.4g}; p{high:g} {upper:.4g}; '
+                               f'min {np.min(value):.4g}; max {np.max(value):.4g}')
                 else:
                     summary = f'{value:.4g}'
                 lines.append(f"{item.name:<{ncmax}s} | {summary}{unit_str}")

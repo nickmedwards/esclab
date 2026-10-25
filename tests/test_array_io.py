@@ -86,7 +86,7 @@ def plots():
 
 @pytest.mark.parametrize('live', [True, False])
 @pytest.mark.parametrize('mode', ['fill_between', 'spaghetti', 'indices'])
-def test_array_rendering_both_axes_and_buffer_growth(live, mode, plots):
+def test_array_rendering_both_axes_and_buffer_growth(live, mode, plots, monkeypatch):
     output = Component.Output()
     output.name = 'ensemble'
     output.units = 'kW'
@@ -153,8 +153,22 @@ def test_array_rendering_both_axes_and_buffer_growth(live, mode, plots):
         painter.end()
     plotter._plot_tooltip_enabled = True
     position = plotter.ax1.vb.mapViewToScene(QtCore.QPointF(1, 5))
+    percentile_calls = []
+    original_percentile = np.percentile
+
+    def track_percentile(*args, **kwargs):
+        percentile_calls.append(np.asarray(args[0]).shape)
+        return original_percentile(*args, **kwargs)
+
+    monkeypatch.setattr(np, 'percentile', track_percentile)
     plotter._on_strip_mouse_move((position,))
-    assert 'mean 5.333' in plotter._tip_label.text()
+    summary = 'mean 5.333; p10 2.4; p90 8.8; min 2; max 10 kW'
+    assert plotter._tip_label.text().count(summary) == 2
+    # Compute on each axis's hovered row only; moving within that timestep
+    # reuses the visible tooltip rather than recomputing the statistics.
+    assert percentile_calls == [(3,), (3,)]
+    plotter._on_strip_mouse_move((position,))
+    assert percentile_calls == [(3,), (3,)]
 
 
 @pytest.mark.parametrize('config', [

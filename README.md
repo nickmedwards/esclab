@@ -138,6 +138,9 @@ model.add_plotter([model.building.indoor, model.source.ambient],
 
 Live and deferred plots support all modes. Each signal must keep a fixed member
 count throughout a plot's history; empty arrays and matrices raise a clear error.
+Array tooltips show the mean, the configured lower and upper percentiles, minimum,
+and maximum across all members at the hovered timestep. Statistics are computed
+only when the tooltip moves to another timestep, using that step's values.
 Array histories retain every member, so memory use scales with steps times
 members. See `src/esclab/models/sample_array_io.py` for a simulation example.
 
