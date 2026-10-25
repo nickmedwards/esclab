@@ -76,6 +76,9 @@ model.add_plotter([model.ca_1.y_out, model.ca_2.y_out, model.cb.y_out],
 
 # ----------------------------------------------------------
 # Run the simulation
+# The final step calls each component's postsim_calcs() once in execution order.
+# To extend stop_time later, set model.settings.auto_postsim_calcs = False before
+# stepping, then call model.finalize() explicitly when the entire run is finished.
 while model.time < model.settings.stop_time:
     model.step()
 

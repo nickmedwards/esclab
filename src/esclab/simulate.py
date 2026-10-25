@@ -405,6 +405,9 @@ class Component:
     def postsim_calcs(self):
         """
         Calculations done after the final time step of the simulation. Data from all time steps is available.
+        Called once by Model.finalize(), in component execution order, including when
+        the final step reaches the iteration limit without converging. Results stored
+        here do not retroactively update historian samples or plots.
         """
         pass
 
@@ -519,6 +522,9 @@ class Model:
       to be plotted on the y1 and y2 axes, respectively.
     * Optionally, call initialize() to initialize the model before running the simulation. This will automatically call the presim_setup() method of each component, and assign names to all inputs and outputs.
     * In a loop for all time steps, call the step() method to run the simulation. This will run through all components and update inputs from connections, calculate outputs, check for convergence, and log data for plotting and historian.
+    * The final step automatically calls finalize(), dispatching component postsim_calcs()
+      once in execution order, whether or not the step converged. Set
+      settings.auto_postsim_calcs=False to extend the run and finalize() manually later.
 
     Substeps in the time series workflow are as follows:
 
@@ -537,6 +543,7 @@ class Model:
         timestep = 1            # [sec] Simulation time step
         start_time = 0          # [sec] Simulation start time
         stop_time = 24*3600     # [sec] Simulation stop time (not inclusive)
+        auto_postsim_calcs = True  # Finalize automatically when step() reaches stop_time.
         tol_rel_global = 1.e-6  # Relative tolerance for connections. Used if not overridden by individual connections
         tol_abs_global = 1.e-4  # Absolute tolerance for connections. Used if not overridden by individual connections
         max_iterations = 100    # Maximum number of iterations for convergence, per step(). Raises warning if exceeded.
@@ -572,6 +579,7 @@ class Model:
         self._components = []
         # Internal flag to track whether stepping has begun
         self._has_started_stepping = False
+        self._finalization_state = "pending"  # pending, running, completed, or failed
         # Internal bookkeeping for network equation building and solving
         self._output_owner_by_id = {}
         self._input_owner_by_id = {}
@@ -1428,6 +1436,34 @@ class Model:
         return 
 
     # ----------------------------------------------------------------------- 
+    def finalize(self):
+        """Call component postsim_calcs() once, in component execution order.
+
+        May be called explicitly after an early stop or with auto_postsim_calcs
+        disabled. At least one completed timestep is required. Successful repeated
+        calls do nothing. Once finalization starts, further stepping is forbidden.
+        Hook exceptions propagate; failed finalization cannot be retried because
+        earlier hooks may already have produced side effects.
+        """
+        if self._finalization_state == "completed":
+            return
+        if self._finalization_state != "pending":
+            raise RuntimeError(
+                f"Cannot finalize: finalization is {self._finalization_state}."
+            )
+        if self._step_count == 0:
+            raise RuntimeError("Cannot finalize before a timestep has completed.")
+
+        self._finalization_state = "running"
+        try:
+            for component in self._components:
+                component.postsim_calcs()
+        except BaseException:
+            self._finalization_state = "failed"
+            raise
+        self._finalization_state = "completed"
+
+    # -----------------------------------------------------------------------
     def step(self, n_steps = 1):
         """
         Parameters
@@ -1435,6 +1471,10 @@ class Model:
         n_steps : int, optional
             Expected number of steps (Note: Internal logic currently executes a single step per call).
         """
+        if self._finalization_state != "pending":
+            raise RuntimeError(
+                "Cannot step after finalization has started. Create a new model for a new run."
+            )
         # Check overall initialization for the model
         if not self.is_initialized:
             self.initialize()
@@ -1617,6 +1657,9 @@ class Model:
             self._last_progress_line_len = len(line)
             self._last_progress_step = progress_step
             self._last_progress_wall_clock = now_clock
+
+        if self.settings.auto_postsim_calcs and self.time >= self.settings.stop_time:
+            self.finalize()
 
         return 
 

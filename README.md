@@ -72,6 +72,39 @@ To create a new model, prepare one or more component files that contain instance
 
 Templates and examples for *Components* and *Models* are provided in their respective folders. 
 
+The stepping loop stays in the model script. When `model.step()` advances time to
+or beyond `model.settings.stop_time`, it automatically calls `model.finalize()`.
+This calls each component's `postsim_calcs()` once, in component execution order,
+after the final timestep's calculations, historian logging, and plot logging.
+These hooks run even if that timestep reaches its iteration limit without
+converging. An exception interrupting timestep execution does not automatically
+finalize the simulation. Hooks run inside the final `step()` call, before any
+subsequent code in the caller's loop body.
+
+To extend a simulation after reaching its current stop time, disable automatic
+finalization before stepping:
+
+```python
+model.settings.auto_postsim_calcs = False
+while model.time < model.settings.stop_time:
+    model.step()
+
+model.settings.stop_time = extended_stop_time
+while model.time < model.settings.stop_time:
+    model.step()
+
+model.finalize()
+```
+
+Alternatively, re-enable `auto_postsim_calcs` before stepping through the final
+extension. Explicit `finalize()` ignores this setting and can also finish a run
+stopped early, after at least one completed timestep. Successful repeated calls
+do nothing. Once finalization starts, further stepping is forbidden; create a new
+model for a new run. If a hook raises, its exception propagates and finalization
+cannot be retried, since earlier hooks may already have produced side effects.
+Post-simulation results should generally be stored as separate component
+attributes: changes to outputs in these hooks do not rewrite history or plots.
+
 * `template_model.py` provides a template for building new system models
 * `template_component.py` provides a template for a component library
 * `sample_circuit_secsub.py` gives and example of a simple solve loop using successive substitution (no coupled equations)
