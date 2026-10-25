@@ -219,17 +219,26 @@ def test_selected_indices_fit_excludes_hidden_members(plots):
     assert low < 2 < 3 < high < 4
 
 
-def test_sample_model_short_run(plots):
+@pytest.mark.parametrize('realization_count', [1, 3])
+def test_sample_model_short_run(plots, realization_count):
     from esclab.models.sample_array_io import create_model
-    model = create_model(realization_count=3, show_plots=True, plot_realization=1)
+    selected_index = realization_count - 1
+    model = create_model(realization_count=realization_count, show_plots=True,
+                         plot_realization=selected_index)
     plots.extend(model._plotters)
     for _ in range(3):
         model.step()
+    times = np.array(model.historian['time'])
+    expected_input = np.sin(2 * np.pi * times[:, None] / model.source.period.v) * model.source.amplitude.v
+    expected_output = expected_input * model.response.gain.v
+    np.testing.assert_allclose(model.historian[model.source.signal.name], expected_input)
+    np.testing.assert_allclose(model.historian[model.response.result.name], expected_output)
+    np.testing.assert_allclose(model.response.signal.v, expected_input[-1])
     assert [p.array_config[0]['mode'] for p in model._plotters] == [
         'fill_between', 'spaghetti', 'indices']
     for plotter in model._plotters:
         plotter._finalize()
-        assert plotter.y1_data[0][:3].shape == (3, 3)
-        assert np.isfinite(plotter.y1_data[0][:3]).all()
+        assert plotter.y1_data[0][:3].shape == (3, realization_count)
+        np.testing.assert_allclose(plotter.y1_data[0][:3], expected_output)
     members, _ = model._plotters[-1]._array_artists[0]
-    np.testing.assert_allclose(members[0][1].yData, model._plotters[-1].y1_data[0][:3, 1])
+    np.testing.assert_allclose(members[0][1].yData, expected_output[:, selected_index])
