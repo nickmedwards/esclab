@@ -3,6 +3,6 @@
 ESCLab: Engineering Simulation and Control Lab
 """
 
-__version__ = "0.0.5"
+__version__ = "0.0.6"
 __author__ = "Mike Wagner"
 __email__ = "mjwagner2@wisc.edu"
