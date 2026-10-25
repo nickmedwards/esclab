@@ -100,7 +100,8 @@ class Component:
 
         Contains the value (v), units, name, but no connection status.
         Numeric values may be scalars or NumPy vectors, with shape (m,)
-        or (1, m). Use .v for NumPy operations on the stored array.
+        or (1, m). Arithmetic, NumPy conversion, iteration, truth testing,
+        and copying delegate to the stored value without requiring .v.
         """
         def __init__(self):
             self.name = ''
@@ -126,10 +127,15 @@ class Component:
         # __setattr__ method. 
         def __float__(self):             return float(self.v)
         def __int__(self):               return int(self.v)
+        def __bool__(self):              return bool(self.v)
         def __array__(self, dtype=None, copy=None):
             if copy is None:
                 return np.asarray(self.v, dtype=dtype)
             return np.array(self.v, dtype=dtype, copy=copy)
+
+        def copy(self):
+            """Return a shallow value copy, with independent data for NumPy arrays."""
+            return copy.copy(self.v)
 
         def __neg__(self):               return -self.v
         def __pos__(self):               return +self.v
@@ -159,6 +165,7 @@ class Component:
         __hash__ = object.__hash__  # restore identity hash (Python sets it to None when __eq__ is defined)
 
         def __len__(self):               return len(self.v)
+        def __iter__(self):              return iter(self.v)
         def __getitem__(self, idx):      return self.v[idx]
         def __setitem__(self, idx, val): self.v[idx] = val
     # ------------ end class __io_base ----------------------------------------
