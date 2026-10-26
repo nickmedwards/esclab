@@ -45,6 +45,49 @@ class _SequenceSeriesItem:
         return self._series[-1]
 
 
+class _FillLegendSample(qtg.ItemSample):
+    """The default legend sample expects line options absent on FillBetweenItem."""
+
+    def paint(self, painter, *args):
+        painter.setPen(qtg.mkPen(None))
+        brush = self.item.brush() if self.item.isVisible() else qtg.mkBrush('#777777')
+        painter.setBrush(brush)
+        painter.drawRect(QtCore.QRectF(2, 5, 16, 10))
+
+
+class _SeriesGroup:
+    """Expose a group of realization lines as one legend sample."""
+
+    def __init__(self, lines):
+        self.lines = lines
+        self.opts = lines[0].opts
+
+    def isVisible(self):
+        return any(line.isVisible() for line in self.lines)
+
+    def setVisible(self, visible):
+        for line in self.lines:
+            line.setVisible(visible)
+
+
+class _ToggleLegend(qtg.LegendItem):
+    """Give labels the same visibility toggle as their clickable swatches."""
+
+    def addItem(self, item, name):
+        super().addItem(item, name)
+        sample, label = self.items[-1]
+        label.setAcceptedMouseButtons(QtCore.Qt.LeftButton)
+        label.item.setAcceptedMouseButtons(QtCore.Qt.NoButton)
+        label.setCursor(QtCore.Qt.PointingHandCursor)
+        label.mouseClickEvent = sample.mouseClickEvent
+
+        def update_label(_item=None):
+            label.setOpacity(1.0 if sample.item.isVisible() else 0.4)
+
+        sample.sigClicked.connect(update_label)
+        update_label()
+
+
 class OnlinePlotter:
     app = None
     main_window = None
@@ -367,7 +410,7 @@ class OnlinePlotter:
     y2 | [d, e, f, ...] component input or output values to be plotted on axis 2
     """
 
-    def __init__(self, y1, y2, y1lim, y2lim, y1label, y2label, nmax_points, update_every, plotter_size=(0.9, 0.9), tab_title=None, show_live=True, time_units='sec', *, font_size=None, font_color='#c0c0c0', bg_color=None, line_weights=2, line_styles=None, line_colors=None, grid=True, grid_horizontal=True, grid_vertical=True):
+    def __init__(self, y1, y2, y1lim, y2lim, y1label, y2label, nmax_points, update_every, plotter_size=(0.9, 0.9), tab_title=None, show_live=True, time_units='sec', *, font_size=None, font_color='#c0c0c0', bg_color=None, line_weights=2, line_styles=None, line_colors=None, grid=True, grid_horizontal=True, grid_vertical=True, array_config=None):
         """Plot time supplied in seconds using the selected display units.
 
         time_units must be nsec, msec, sec (default), min, hr, day, week,
@@ -406,6 +449,11 @@ class OnlinePlotter:
         self.font_color = self._color(font_color)
         self.bg_color = None if bg_color is None else self._color(bg_color)
         nseries = len(y1) + (len(y2) if y2 is not None else 0)
+        configs = array_config if isinstance(array_config, list) else [array_config] * nseries
+        if len(configs) != nseries:
+            raise ValueError(f'array_config must contain exactly {nseries} values (y1 then y2)')
+        self.array_config = [self._array_options(config) for config in configs]
+        self._array_artists = {}
         self.line_weights = self._series_options(line_weights, nseries, 'line_weights')
         self.line_styles = self._series_options(line_styles, nseries, 'line_styles')
         self.line_colors = self._series_options(line_colors, nseries, 'line_colors')
@@ -422,6 +470,52 @@ class OnlinePlotter:
         else:
             self.y1_lines = []
             self.y2_lines = []
+
+    @staticmethod
+    def _array_options(config):
+        defaults = dict(mode='fill_between', percentiles=(5, 95), indices=None,
+                        show_mean=True, fill_alpha=0.2, spaghetti_alpha=0.15,
+                        spaghetti_width=1, mean_width=None)
+        if config is None:
+            return defaults
+        if not isinstance(config, dict):
+            raise TypeError('array_config entries must be dicts or None')
+        unknown = config.keys() - defaults.keys()
+        if unknown:
+            raise ValueError(f'Unknown array_config options: {sorted(unknown)}')
+        defaults.update(config)
+        mode = defaults['mode']
+        if mode not in ('fill_between', 'spaghetti', 'indices'):
+            raise ValueError('array_config mode must be fill_between, spaghetti, or indices')
+        if mode == 'indices' and 'show_mean' not in config:
+            defaults['show_mean'] = False
+        percentiles = np.asarray(defaults['percentiles'], dtype=float)
+        if percentiles.shape != (2,) or not np.all(np.isfinite(percentiles)) or not 0 <= percentiles[0] < percentiles[1] <= 100:
+            raise ValueError('array_config percentiles must be two increasing numbers in [0, 100]')
+        defaults['percentiles'] = tuple(percentiles)
+        indices = defaults['indices']
+        if indices is not None:
+            if isinstance(indices, (int, np.integer)) and not isinstance(indices, bool):
+                indices = [indices]
+            if not isinstance(indices, (list, tuple, np.ndarray)) or not len(indices) or any(
+                not isinstance(i, (int, np.integer)) or isinstance(i, bool) or i < 0 for i in indices
+            ):
+                raise ValueError('array_config indices must be a nonempty sequence of nonnegative integers')
+            defaults['indices'] = list(dict.fromkeys(indices))
+        if mode == 'indices' and indices is None:
+            raise ValueError('array_config indices mode requires indices')
+        if not isinstance(defaults['show_mean'], bool):
+            raise ValueError('array_config show_mean must be bool')
+        for key in ('fill_alpha', 'spaghetti_alpha'):
+            if not np.isfinite(defaults[key]) or not 0 <= defaults[key] <= 1:
+                raise ValueError(f'array_config {key} must be in [0, 1]')
+        for key in ('spaghetti_width', 'mean_width'):
+            value = defaults[key]
+            if value is not None and (not np.isfinite(value) or value < 0):
+                raise ValueError(f'array_config {key} must be finite and nonnegative')
+        if defaults['spaghetti_width'] is None:
+            raise ValueError('array_config spaghetti_width must be a number')
+        return defaults
 
     @staticmethod
     def _color(value):
@@ -515,7 +609,9 @@ class OnlinePlotter:
         self.ax1 = self.win.addPlot(viewBox=_AxisLockedViewBox())
         self.ax1.setLabel("bottom", f"Time ({self.time_units})")
         self.ax1.setLabel("left", self.y1label)
-        self.legend_y1 = self.ax1.addLegend(offset=(10, 10))
+        self.legend_y1 = _ToggleLegend(offset=(10, 10))
+        self.legend_y1.setParentItem(self.ax1.vb)
+        self.ax1.legend = self.legend_y1
         self.legend_y1.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 40)))
         self.legend_y2 = None
         self.ax1.showGrid(x=self.grid and self.grid_vertical,
@@ -550,7 +646,7 @@ class OnlinePlotter:
             self.ax1.getAxis("right").linkToView(self.ax2)
             self.ax2.setXLink(self.ax1)
             self.ax1.getAxis("right").setLabel(self.y2label, color="#c0c0c0")
-            self.legend_y2 = qtg.LegendItem(offset=(-10, 10))
+            self.legend_y2 = _ToggleLegend(offset=(-10, 10))
             self.legend_y2.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 40)))
             self.legend_y2.setParentItem(self.ax1.vb)
 
@@ -699,6 +795,7 @@ class OnlinePlotter:
         self.conv_data = np.empty(cap, dtype=float)
         self.iter_data = np.empty(cap, dtype=float)
         self._step_timesteps = np.empty(cap, dtype=float)
+        self._signal_shapes = [None] * (len(self.y1_items) + len(self.y2_items or []))
 
     def _grow_if_needed(self):
         """Double buffer capacity on overflow; correct regardless of timestep variability."""
@@ -707,7 +804,7 @@ class OnlinePlotter:
         new_cap = self._capacity * 2
 
         def _grow(arr):
-            new_arr = np.empty(new_cap, dtype=arr.dtype)
+            new_arr = np.empty((new_cap,) + arr.shape[1:], dtype=arr.dtype)
             new_arr[: arr.shape[0]] = arr
             return new_arr
 
@@ -722,6 +819,20 @@ class OnlinePlotter:
 
     def log_step(self, time, conv_fraction=0.0, iter_fraction=0.0, timestep=None):
         """Buffer a step with time and timestep supplied in seconds."""
+        values = []
+        items = self.y1_items + (self.y2_items or [])
+        for j, item in enumerate(items):
+            value = np.asarray(item.v, dtype=float)
+            if value.ndim == 2 and value.shape[0] == 1:
+                value = value[0]
+            if value.ndim > 1 or (value.ndim == 1 and value.size == 0):
+                raise ValueError(f'{item.name}: plotted values must be scalar or nonempty arrays shaped (m,) or (1, m)')
+            if self._signal_shapes[j] is not None and value.shape != self._signal_shapes[j]:
+                raise ValueError(f'{item.name}: plotted value shape changed from {self._signal_shapes[j]} to {value.shape}')
+            indices = self.array_config[j]['indices']
+            if value.ndim == 1 and indices is not None and max(indices) >= value.size:
+                raise ValueError(f'{item.name}: array_config index {max(indices)} is out of range for {value.size} members')
+            values.append(value)
         self.current_step += 1
         if timestep is None:
             timestep = self._timestep
@@ -734,12 +845,13 @@ class OnlinePlotter:
         self.iter_data[idx] = iter_fraction
         self._step_timesteps[idx] = timestep / self._seconds_per_time_unit
 
-        for j, yval in enumerate(self.y1_items):
-            self.y1_data[j][idx] = yval.v
-
-        if self.y2_items is not None:
-            for j, yval in enumerate(self.y2_items):
-                self.y2_data[j][idx] = yval.v
+        for j, value in enumerate(values):
+            buffers = self.y1_data if j < len(self.y1_items) else self.y2_data
+            k = j if j < len(self.y1_items) else j - len(self.y1_items)
+            if self._signal_shapes[j] is None:
+                buffers[k] = np.empty((self._capacity,) + value.shape, dtype=float)
+                self._signal_shapes[j] = value.shape
+            buffers[k][idx] = value
 
         self._fill_idx += 1
 
@@ -778,11 +890,17 @@ class OnlinePlotter:
 
         x_render = x_view[start_idx:end_idx]
 
-        for i in range(len(self.y1_lines)):
-            self.y1_lines[i].setData(x_render, self.y1_data[i][start_idx:end_idx])
-
-        for i in range(len(self.y2_lines)):
-            self.y2_lines[i].setData(x_render, self.y2_data[i][start_idx:end_idx])
+        for axis, (lines, buffers, items) in enumerate((
+            (self.y1_lines, self.y1_data, self.y1_items),
+            (self.y2_lines, self.y2_data, self.y2_items or []),
+        )):
+            for i, line in enumerate(lines):
+                values = buffers[i][start_idx:end_idx]
+                if values.ndim == 1:
+                    line.setData(x_render, values)
+                else:
+                    index = i if axis == 0 else len(self.y1_items) + i
+                    self._render_array(index, axis, line, items[i], x_render, values)
 
         if self._conv_bar_item is not None:
             self.ax_conv.removeItem(self._conv_bar_item)
@@ -817,6 +935,67 @@ class OnlinePlotter:
         )
         self.ax_iter.addItem(self._iter_bar_item)
 
+    def _render_array(self, index, axis, mean_line, item, x, values):
+        config = self.array_config[index]
+        if index not in self._array_artists:
+            target = self.ax1 if axis == 0 else self.ax2
+            legend = self.legend_y1 if axis == 0 else self.legend_y2
+            color = self._line_options[index]['symbolBrush'].color()
+            members = config['indices']
+            if members is None:
+                members = list(range(values.shape[1])) if config['mode'] == 'spaghetti' else []
+            member_lines = []
+            for member in members:
+                options = dict(self._line_options[index])
+                if config['mode'] == 'spaghetti':
+                    member_color = QtGui.QColor(color)
+                    member_color.setAlphaF(config['spaghetti_alpha'])
+                    options = dict(pen=qtg.mkPen(member_color, width=config['spaghetti_width']))
+                line = qtg.PlotDataItem([], [], **options)
+                target.addItem(line)
+                if config['mode'] != 'spaghetti':
+                    legend.addItem(line, f'{item.name}[{member}]')
+                member_lines.append((member, line))
+            if config['mode'] == 'spaghetti' and member_lines:
+                group = _SeriesGroup([line for _, line in member_lines])
+                legend.addItem(qtg.ItemSample(group), f'{item.name} realizations')
+            bounds = None
+            if config['mode'] == 'fill_between':
+                # PlotDataItem skips updating its curve when pen=None, leaving
+                # FillBetweenItem with an empty path. PlotCurveItem retains
+                # boundary geometry even when its outline is not drawn.
+                lower = qtg.PlotCurveItem(pen=None)
+                upper = qtg.PlotCurveItem(pen=None)
+                target.addItem(lower)
+                target.addItem(upper)
+                fill_color = QtGui.QColor(color)
+                fill_color.setAlphaF(config['fill_alpha'])
+                fill = qtg.FillBetweenItem(lower, upper, brush=qtg.mkBrush(fill_color))
+                fill.setZValue(-10)
+                target.addItem(fill)
+                low, high = config['percentiles']
+                legend.addItem(_FillLegendSample(fill), f'{item.name} ({low:g}–{high:g}%)')
+                bounds = (lower, upper, fill)
+            legend.removeItem(mean_line)
+            if config['show_mean']:
+                legend.addItem(mean_line, f'{item.name} mean')
+                mean_line.setZValue(10)
+                if config['mean_width'] is not None:
+                    pen = qtg.mkPen(mean_line.opts['pen'])
+                    pen.setWidthF(config['mean_width'])
+                    mean_line.setPen(pen)
+            mean_line.setVisible(config['show_mean'])
+            self._array_artists[index] = (member_lines, bounds)
+            self.apply_font_size()
+        member_lines, bounds = self._array_artists[index]
+        mean_line.setData(x, values.mean(axis=1))
+        for member, line in member_lines:
+            line.setData(x, values[:, member])
+        if bounds is not None:
+            lower, upper = np.percentile(values, config['percentiles'], axis=1)
+            bounds[0].setData(x, lower)
+            bounds[1].setData(x, upper)
+
     def _fit_to_full_data(self):
         """Zoom out to the entire logged history, bypassing pyqtgraph's own autoscale
         button which only fits to whatever slice is currently set on the plot items."""
@@ -831,18 +1010,47 @@ class OnlinePlotter:
         x_view = self.x_data[:n]
         self.ax1.setXRange(x_view[0], x_view[n - 1], padding=0.02)
 
-        y1_min = min(np.nanmin(a[:n]) for a in self.y1_data)
-        y1_max = max(np.nanmax(a[:n]) for a in self.y1_data)
-        if self._y1lim is None and y1_min <= y1_max:
-            self.ax1.setYRange(y1_min, y1_max, padding=0.05)
-
-        if self.y2_items is not None and self._y2lim is None:
-            y2_min = min(np.nanmin(a[:n]) for a in self.y2_data)
-            y2_max = max(np.nanmax(a[:n]) for a in self.y2_data)
-            if y2_min <= y2_max:
-                self.ax2.setYRange(y2_min, y2_max, padding=0.05)
+        for offset, buffers, target, limits in (
+            (0, self.y1_data, self.ax1, self._y1lim),
+            (len(self.y1_items), self.y2_data, getattr(self, 'ax2', None), self._y2lim),
+        ):
+            if target is None or limits is not None:
+                continue
+            ranges = []
+            for i, buffer in enumerate(buffers):
+                values = self._plotted_values(offset + i, buffer[:n])
+                finite = values[np.isfinite(values)]
+                if finite.size:
+                    ranges.append((finite.min(), finite.max()))
+            # Preserve the Y range when every trace is hidden or nonfinite.
+            if ranges:
+                low = min(low for low, _ in ranges)
+                high = max(high for _, high in ranges)
+                if low == high:
+                    # Qt otherwise retains the previous span for flat data,
+                    # which can still reflect a now-hidden outlier.
+                    margin = max(abs(low) * 0.01, 0.5)
+                    low, high = low - margin, high + margin
+                target.setYRange(low, high, padding=0.05)
 
         self._render_visible_window()
+
+    def _plotted_values(self, index, values):
+        """Bounds for Fit All reflect the selected traces and statistics."""
+        lines = self.y1_lines + self.y2_lines
+        if values.ndim == 1:
+            return values if lines[index].isVisible() else np.empty(0)
+        config = self.array_config[index]
+        displayed = []
+        if lines[index].isVisible():
+            displayed.append(values.mean(axis=1).ravel())
+        member_lines, bounds = self._array_artists.get(index, ([], None))
+        if bounds is not None and bounds[2].isVisible():
+            displayed.append(np.percentile(values, config['percentiles'], axis=1).ravel())
+        members = [member for member, line in member_lines if line.isVisible()]
+        if members:
+            displayed.append(values[:, members].ravel())
+        return np.concatenate(displayed) if displayed else np.empty(0)
 
     def _setup_strip_tooltip(self):
         self._strip_proxy = qtg.SignalProxy(self.ax1.scene().sigMouseMoved, rateLimit=20, slot=self._on_strip_mouse_move)
@@ -922,8 +1130,17 @@ class OnlinePlotter:
                 # which axis data are we pointing at?
                 axis_data = self.y1_data if j < len(self.y1_items) else self.y2_data
                 jj = j if j < len(self.y1_items) else j - len(self.y1_items)
-                axis_values = np.asarray(axis_data[jj], dtype=float)
-                lines.append(f"{item.name:<{ncmax}s} | {axis_values[idx]:.4g}{unit_str}")
+                # Inspect only the hovered step, never the complete history.
+                value = axis_data[jj][idx]
+                if np.ndim(value):
+                    low, high = self.array_config[j]['percentiles']
+                    lower, upper = np.percentile(value, (low, high))
+                    summary = (f'mean {np.mean(value):.4g}; '
+                               f'p{low:g} {lower:.4g}; p{high:g} {upper:.4g}; '
+                               f'min {np.min(value):.4g}; max {np.max(value):.4g}')
+                else:
+                    summary = f'{value:.4g}'
+                lines.append(f"{item.name:<{ncmax}s} | {summary}{unit_str}")
             text = "\n".join(lines)
 
         tooltip_font = QtGui.QFont('Consolas')

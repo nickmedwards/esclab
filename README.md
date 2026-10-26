@@ -72,6 +72,39 @@ To create a new model, prepare one or more component files that contain instance
 
 Templates and examples for *Components* and *Models* are provided in their respective folders. 
 
+The stepping loop stays in the model script. When `model.step()` advances time to
+or beyond `model.settings.stop_time`, it automatically calls `model.finalize()`.
+This calls each component's `postsim_calcs()` once, in component execution order,
+after the final timestep's calculations, historian logging, and plot logging.
+These hooks run even if that timestep reaches its iteration limit without
+converging. An exception interrupting timestep execution does not automatically
+finalize the simulation. Hooks run inside the final `step()` call, before any
+subsequent code in the caller's loop body.
+
+To extend a simulation after reaching its current stop time, disable automatic
+finalization before stepping:
+
+```python
+model.settings.auto_postsim_calcs = False
+while model.time < model.settings.stop_time:
+    model.step()
+
+model.settings.stop_time = extended_stop_time
+while model.time < model.settings.stop_time:
+    model.step()
+
+model.finalize()
+```
+
+Alternatively, re-enable `auto_postsim_calcs` before stepping through the final
+extension. Explicit `finalize()` ignores this setting and can also finish a run
+stopped early, after at least one completed timestep. Successful repeated calls
+do nothing. Once finalization starts, further stepping is forbidden; create a new
+model for a new run. If a hook raises, its exception propagates and finalization
+cannot be retried, since earlier hooks may already have produced side effects.
+Post-simulation results should generally be stored as separate component
+attributes: changes to outputs in these hooks do not rewrite history or plots.
+
 * `template_model.py` provides a template for building new system models
 * `template_component.py` provides a template for a component library
 * `sample_circuit_secsub.py` gives and example of a simple solve loop using successive substitution (no coupled equations)
@@ -94,6 +127,63 @@ defined as 365 days.
 model.add_plotter([model.storage.charge], time_units="hr")
 model.add_plotter_simstats(time_units="min", show_live=False)
 ```
+
+Inputs, outputs, and parameters support NumPy arrays shaped `(m,)` or `(1, m)`
+as well as scalars. Assign arrays directly to a port or parameter and use `.v`
+to access the underlying array. Connections apply relaxation and convergence
+tolerances element by element; every element must converge. Array parameter
+defaults are independent for each component instance. The historian stores a
+copy of each array output per step, preserving its original shape. General
+`(n, m)` matrix signals are outside this vector plotting API.
+
+Array plotters default to a 5th–95th percentile envelope with the ensemble mean.
+Use `array_config` to select a mode and configure its appearance:
+
+```python
+model.add_plotter(model.source.ambient,
+    array_config={"mode": "fill_between", "percentiles": (10, 90),
+                  "fill_alpha": 0.25, "mean_width": 3})
+model.add_plotter(model.battery.grid,
+    array_config={"mode": "spaghetti", "spaghetti_alpha": 0.1,
+                  "spaghetti_width": 1, "show_mean": True})
+model.add_plotter(model.battery.soc,
+    array_config={"mode": "indices", "indices": [0, 5, 12]})
+```
+
+Percentiles use the 0–100 scale and are computed across realizations at each
+time step. Spaghetti mode draws all members by default; `indices` can limit it
+to a subset. Indices are zero based; a single integer also works. In envelope
+mode, `indices` adds selected member traces over the band. `show_mean` defaults
+to `True` for envelopes and spaghetti, and `False` for selected indices.
+Existing `line_colors`, `line_styles`, and `line_weights` configure each signal;
+member spaghetti lines use that signal's color with their own alpha and width.
+`mean_width=None` uses the signal's line weight.
+
+A single configuration dict applies to every array signal on both axes; scalar
+signals retain their usual behavior. For different configurations per signal,
+pass a list ordered as `y1` followed by `y2` (use `None` for defaults):
+
+```python
+model.add_plotter([model.building.indoor, model.source.ambient],
+    array_config=[{"mode": "fill_between", "percentiles": (5, 95)},
+                  {"mode": "indices", "indices": [0, 2]}])
+```
+
+Live and deferred plots support all modes. Each signal must keep a fixed member
+count throughout a plot's history; empty arrays and matrices raise a clear error.
+Array tooltips show the mean, the configured lower and upper percentiles, minimum,
+and maximum across all members at the hovered timestep. Statistics are computed
+only when the tooltip moves to another timestep, using that step's values.
+Array histories retain every member, so memory use scales with steps times
+members. See `src/esclab/models/sample_array_io.py` for a simulation example.
+
+Click a legend label or its colored swatch to hide or restore that trace. Hidden
+labels are dimmed. Spaghetti plots have separate entries for the realization
+lines as a group and the mean; percentile bands and selected indices can also be
+toggled separately. These controls work during live simulation and after it
+finishes. Hidden traces continue recording data and restore their history when
+shown again. "Fit All" scales to visible traces; if an axis has no visible finite
+values, its current Y range is preserved. Explicit Y limits remain in effect.
 
 Set `model.settings.global_plotter_args` to supply defaults for all new data
 plotters, including simulation-statistics plotters. Any plotter keyword option

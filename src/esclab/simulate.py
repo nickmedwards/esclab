@@ -76,11 +76,15 @@ class Connection:
         self.is_converged = np.all(self.err_abs <= (self.tol_abs + self.tol_rel * scale))
 
         if self.log_n_iter > 0:
-            la = np.array([self.source.v, self.err_abs, self.err_rel])
+            # Keep one [value, absolute error, relative error] record per
+            # element for vector signals, preserving the scalar log layout.
+            la = np.stack(np.broadcast_arrays(self.source.v, self.err_abs, self.err_rel))
+            if self.iter_log.shape[1:] != la.shape:
+                self.iter_log = np.zeros((max(self.log_n_iter, 1),) + la.shape)
             if self.n_iter < self.log_n_iter: 
                 self.iter_log[self.n_iter,:] = la
             else:
-                self.iter_log = np.roll(self.iter_log, -1)
+                self.iter_log = np.roll(self.iter_log, -1, axis=0)
                 self.iter_log[-1,:] = la
 
         self.n_iter += 1        
@@ -95,6 +99,9 @@ class Component:
         Base for Input, Parameter, and Output classes.
 
         Contains the value (v), units, name, but no connection status.
+        Numeric values may be scalars or NumPy vectors, with shape (m,)
+        or (1, m). Arithmetic, NumPy conversion, iteration, truth testing,
+        and copying delegate to the stored value without requiring .v.
         """
         def __init__(self):
             self.name = ''
@@ -120,7 +127,15 @@ class Component:
         # __setattr__ method. 
         def __float__(self):             return float(self.v)
         def __int__(self):               return int(self.v)
-        def __array__(self, dtype=None): return np.asarray(self.v) if dtype is None else np.asarray(self.v, dtype=dtype)
+        def __bool__(self):              return bool(self.v)
+        def __array__(self, dtype=None, copy=None):
+            if copy is None:
+                return np.asarray(self.v, dtype=dtype)
+            return np.array(self.v, dtype=dtype, copy=copy)
+
+        def copy(self):
+            """Return a shallow value copy, with independent data for NumPy arrays."""
+            return copy.copy(self.v)
 
         def __neg__(self):               return -self.v
         def __pos__(self):               return +self.v
@@ -150,6 +165,7 @@ class Component:
         __hash__ = object.__hash__  # restore identity hash (Python sets it to None when __eq__ is defined)
 
         def __len__(self):               return len(self.v)
+        def __iter__(self):              return iter(self.v)
         def __getitem__(self, idx):      return self.v[idx]
         def __setitem__(self, idx, val): self.v[idx] = val
     # ------------ end class __io_base ----------------------------------------
@@ -178,8 +194,9 @@ class Component:
                 if not np.any(np.isnan(self.connection.source.v)):
                     new_value = self.connection.compute_new_value()
                     converged = self.connection.check_convergence(new_value)
-                    self.connection.source_last_value = self.connection.source.v
-                    self.v = new_value
+                    source = self.connection.source.v
+                    self.connection.source_last_value = source.copy() if isinstance(source, np.ndarray) else source
+                    self.v = new_value.copy() if isinstance(new_value, np.ndarray) else new_value
                     return converged
                 else:
                     return False
@@ -213,7 +230,10 @@ class Component:
             for attr_name, attr_val in vars(cls).items():
                 if isinstance(attr_val, (Component.Input, Component.Output, Component.Parameter)):
                     if attr_name not in self.__dict__:
-                        object.__setattr__(self, attr_name, copy.copy(attr_val))
+                        instance_item = copy.copy(attr_val)
+                        if isinstance(attr_val.v, np.ndarray):
+                            instance_item.v = attr_val.v.copy()
+                        object.__setattr__(self, attr_name, instance_item)
         self.trnsys_type = ''     # TRNSYS type number, if applicable <string>
         self.name = ''
         self.coupled_eqs = None  # Set by Model during the matrix-build phase; None otherwise.
@@ -385,6 +405,9 @@ class Component:
     def postsim_calcs(self):
         """
         Calculations done after the final time step of the simulation. Data from all time steps is available.
+        Called once by Model.finalize(), in component execution order, including when
+        the final step reaches the iteration limit without converging. Results stored
+        here do not retroactively update historian samples or plots.
         """
         pass
 
@@ -499,6 +522,9 @@ class Model:
       to be plotted on the y1 and y2 axes, respectively.
     * Optionally, call initialize() to initialize the model before running the simulation. This will automatically call the presim_setup() method of each component, and assign names to all inputs and outputs.
     * In a loop for all time steps, call the step() method to run the simulation. This will run through all components and update inputs from connections, calculate outputs, check for convergence, and log data for plotting and historian.
+    * The final step automatically calls finalize(), dispatching component postsim_calcs()
+      once in execution order, whether or not the step converged. Set
+      settings.auto_postsim_calcs=False to extend the run and finalize() manually later.
 
     Substeps in the time series workflow are as follows:
 
@@ -517,6 +543,7 @@ class Model:
         timestep = 1            # [sec] Simulation time step
         start_time = 0          # [sec] Simulation start time
         stop_time = 24*3600     # [sec] Simulation stop time (not inclusive)
+        auto_postsim_calcs = True  # Finalize automatically when step() reaches stop_time.
         tol_rel_global = 1.e-6  # Relative tolerance for connections. Used if not overridden by individual connections
         tol_abs_global = 1.e-4  # Absolute tolerance for connections. Used if not overridden by individual connections
         max_iterations = 100    # Maximum number of iterations for convergence, per step(). Raises warning if exceeded.
@@ -552,6 +579,7 @@ class Model:
         self._components = []
         # Internal flag to track whether stepping has begun
         self._has_started_stepping = False
+        self._finalization_state = "pending"  # pending, running, completed, or failed
         # Internal bookkeeping for network equation building and solving
         self._output_owner_by_id = {}
         self._input_owner_by_id = {}
@@ -587,6 +615,7 @@ class Model:
         'grid': True,
         'grid_horizontal': True,
         'grid_vertical': True,
+        'array_config': None,
     }
 
     def _resolve_plotter_args(self, explicit_args, *, simstats=False):
@@ -653,7 +682,8 @@ class Model:
                     time_units=_NOT_SET, plotter_size=_NOT_SET, *,
                     font_size=_NOT_SET, font_color=_NOT_SET, bg_color=_NOT_SET,
                     line_weights=_NOT_SET, line_styles=_NOT_SET, line_colors=_NOT_SET,
-                    grid=_NOT_SET, grid_horizontal=_NOT_SET, grid_vertical=_NOT_SET):
+                    grid=_NOT_SET, grid_horizontal=_NOT_SET, grid_vertical=_NOT_SET,
+                    array_config=_NOT_SET):
         """
         Add a plotter to the model to visualize component inputs and outputs over time.
 
@@ -703,6 +733,16 @@ class Model:
         grid, grid_horizontal, grid_vertical : bool, optional
             Show the grid and its horizontal/vertical lines (all default True).
             Setting grid=False hides both directions.
+        array_config : dict or list of dict, optional
+            Configuration for vector signals shaped (m,) or (1, m).
+            A dict applies to all signals; a list matches y1 then y2.
+            mode is 'fill_between' (default), 'spaghetti', or 'indices'.
+            percentiles=(5, 95) specifies the shaded band. indices selects
+            zero-based members (all by default for spaghetti). show_mean
+            defaults to True except in indices mode. fill_alpha=0.2,
+            spaghetti_alpha=0.15, spaghetti_width=1, and mean_width=None
+            control appearance; None uses the signal's line weight.
+            Scalar signals ignore this configuration.
         """
         options = self._resolve_plotter_args(dict(
             y1lim=y1lim, y2lim=y2lim, y1label=y1label, y2label=y2label,
@@ -712,6 +752,7 @@ class Model:
             font_size=font_size, font_color=font_color, bg_color=bg_color,
             line_weights=line_weights, line_styles=line_styles, line_colors=line_colors,
             grid=grid, grid_horizontal=grid_horizontal, grid_vertical=grid_vertical,
+            array_config=array_config,
         ))
         self._add_plotter(y1, y2, options)
 
@@ -1395,6 +1436,34 @@ class Model:
         return 
 
     # ----------------------------------------------------------------------- 
+    def finalize(self):
+        """Call component postsim_calcs() once, in component execution order.
+
+        May be called explicitly after an early stop or with auto_postsim_calcs
+        disabled. At least one completed timestep is required. Successful repeated
+        calls do nothing. Once finalization starts, further stepping is forbidden.
+        Hook exceptions propagate; failed finalization cannot be retried because
+        earlier hooks may already have produced side effects.
+        """
+        if self._finalization_state == "completed":
+            return
+        if self._finalization_state != "pending":
+            raise RuntimeError(
+                f"Cannot finalize: finalization is {self._finalization_state}."
+            )
+        if self._step_count == 0:
+            raise RuntimeError("Cannot finalize before a timestep has completed.")
+
+        self._finalization_state = "running"
+        try:
+            for component in self._components:
+                component.postsim_calcs()
+        except BaseException:
+            self._finalization_state = "failed"
+            raise
+        self._finalization_state = "completed"
+
+    # -----------------------------------------------------------------------
     def step(self, n_steps = 1):
         """
         Parameters
@@ -1402,6 +1471,10 @@ class Model:
         n_steps : int, optional
             Expected number of steps (Note: Internal logic currently executes a single step per call).
         """
+        if self._finalization_state != "pending":
+            raise RuntimeError(
+                "Cannot step after finalization has started. Create a new model for a new run."
+            )
         # Check overall initialization for the model
         if not self.is_initialized:
             self.initialize()
@@ -1517,7 +1590,7 @@ class Model:
                         if not input.connection.is_converged:
                             ps = f'{self.time:<10.5f} | {input.connection.source.name} not converged after {input.connection.n_iter} iterations.'
                             if input.connection.log_n_iter > 0:
-                                ps += ' Iter log: ' + ' '.join(input.connection.iter_log[:,0].astype(str))
+                                ps += ' Iter log: ' + ' '.join(str(value) for value in input.connection.iter_log[:,0])
                             print(ps)
 
             err_rel_history.append(max_rel_err)
@@ -1547,11 +1620,8 @@ class Model:
                 input.connection.reset_for_step()
 
             for output in component.get_outputs():
-                try:
-                    if not isinstance(output.v, np.ndarray):
-                        self.historian[output.name].append(output.v)
-                except ValueError:
-                    pass
+                value = output.v
+                self.historian[output.name].append(value.copy() if isinstance(value, np.ndarray) else value)
 
         self._step_count += 1
         
@@ -1587,6 +1657,9 @@ class Model:
             self._last_progress_line_len = len(line)
             self._last_progress_step = progress_step
             self._last_progress_wall_clock = now_clock
+
+        if self.settings.auto_postsim_calcs and self.time >= self.settings.stop_time:
+            self.finalize()
 
         return 
 
