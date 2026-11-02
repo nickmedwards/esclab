@@ -274,7 +274,7 @@ class Tank(HasFluid):
             dR/ddT = m0
             dR/ddm = T0
         """
-        
+
         if self.coupled_eqs is not None:
             # Get the timestep
             dt = self.model.settings.timestep
@@ -290,8 +290,8 @@ class Tank(HasFluid):
             # mass balance
             # m_dot_in - m_dot_out - m/dt = m0/dt
             self.coupled_eqs.add_equation({
-                self.coupled_eqs.source(self.m_dot_out): 1,
-                self.coupled_eqs.source(self.m_dot_in): -1,
+                self.coupled_eqs.source(self.m_dot_in): 1,
+                self.coupled_eqs.source(self.m_dot_out): -1,
                 self.m_final: -1/dt,
             }, rhs = m0/dt)
 
