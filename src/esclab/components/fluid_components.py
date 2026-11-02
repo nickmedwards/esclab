@@ -17,11 +17,11 @@ class Pump(HasFluid):
     S = Component.Parameter(350)
 
     m_dot_in = Component.Input()
-    T_in = Component.Input()
+    T_in     = Component.Input()
 
-    W_pump = Component.Output()
+    W_pump    = Component.Output()
     m_dot_out = Component.Output()
-    T_out = Component.Output()
+    T_out     = Component.Output()
 
     def calculate(self):
         # TODO: maybe make output setting functions to make more generic?
@@ -51,17 +51,17 @@ class Pump(HasFluid):
 # ---------------------------------------------------------------------
 
 class Pipe(HasFluid):
-    D = Component.Parameter(0.05)
-    L = Component.Parameter(10.)
-    h_ext = Component.Parameter(10.)
+    D         = Component.Parameter(0.05)
+    L         = Component.Parameter(10.)
+    h_ext     = Component.Parameter(10.)
     T_ambient = Component.Parameter(25.)
 
     m_dot_in = Component.Input()
-    T_in = Component.Input()
+    T_in     = Component.Input()
 
     m_dot_out = Component.Output()
-    T_out = Component.Output()
-    Q_loss = Component.Output()
+    T_out     = Component.Output()
+    Q_loss    = Component.Output()
 
     def presim_setup(self, **kwargs):
         self.A = self.pi * self.D * self.L
@@ -125,11 +125,11 @@ class Pipe(HasFluid):
 
 class TeeOut(HasFluid):
     m_dot_in = Component.Input()
-    T_in = Component.Input()
+    T_in     = Component.Input()
 
     m_dot_out_1 = Component.Output()
     m_dot_out_2 = Component.Output()
-    T_out = Component.Output()
+    T_out       = Component.Output()
     
     def calculate(self):
         if self.coupled_eqs is not None:
@@ -151,13 +151,13 @@ class TeeOut(HasFluid):
 class TeeReturn(HasFluid):
     m_dot_in_1 = Component.Input()
     m_dot_in_2 = Component.Input()
-    T_in_1 = Component.Input()
-    T_in_2 = Component.Input()
+    T_in_1     = Component.Input()
+    T_in_2     = Component.Input()
 
     m_dot_out = Component.Output()
-    T_out = Component.Output()
-    m_res = Component.Output()
-    E_res = Component.Output()
+    T_out     = Component.Output()
+    m_res     = Component.Output()
+    E_res     = Component.Output()
 
 
     def calculate(self):
@@ -206,17 +206,14 @@ class Tank(HasFluid):
     m_init = Component.Parameter(40.)  # kg
     T_init = Component.Parameter(400)  # K
     # Inputs
-    T_in = Component.Input()
-    m_dot_in = Component.Input()
+    T_in      = Component.Input()
+    m_dot_in  = Component.Input()
     m_dot_out = Component.Input()
     # Outputs
-    dT = Component.Output()
-    dm = Component.Output()
-    T_out = Component.Output()
+    dT      = Component.Output()
+    dm      = Component.Output()
+    T_out   = Component.Output()
     m_final = Component.Output()  # report the current mass of the tank
-
-    def __init__(self):
-        super().__init__()
 
     def presim_setup(self, **kwargs):
         # We need to keep track of the component state information -- mass and temperature
@@ -340,4 +337,39 @@ class Tank(HasFluid):
             self.T = self.T_out
             self.m = self.m_final
         return
+
+# ---------------------------------------------------------------------
+
+class Turbine(HasFluid):
+    eta_s    = Component.Parameter(0.9)
+    PR       = Component.Parameter(4.0)
+    mdot_in  = Component.Input()
+    T_in     = Component.Input()
+    P_in     = Component.Input()
+    h_out    = Component.Output()
+    T_out    = Component.Output()
+    P_out    = Component.Output()
+    mdot_out = Component.Output()
+    W        = Component.Output()
+
+    def calculate(self):
+        """
+        Calculate the turbine outlet conditions and work output based on the inlet conditions and isentropic efficiency.
+
+        Mass balance: 
+            mdot_out - mdot_in = 0
+        
+        Energy balance:
+            W = mdot_in*(h_in - h_out)
+        """
+        self.mdot_out = self.mdot_in
+        h_in = fluid_properties.enthalpy(self.fluid, T=self.T_in, P=self.P_in)
+        s_in = fluid_properties.entropy(self.fluid, T=self.T_in, P=self.P_in)
+        self.P_out = self.P_in / self.model.design.PR
+        h_out_s = fluid_properties.enthalpy(self.fluid,P=self.P_out, s=s_in)
+        self.h_out = h_in - (h_in-h_out_s)*self.eta_s
+        self.T_out = fluid_properties.temperature(self.fluid, P=self.P_out, h=self.h_out)
+        self.W = (h_in - self.h_out)*self.mdot_in        
+        return 
+
 # ---------------------------------------------------------------------

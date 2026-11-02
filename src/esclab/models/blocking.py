@@ -1,5 +1,6 @@
 # ---------------------------------------------------------------------
 # modeling two independent fluid loops using fluid_components.py
+# probably need cooler
 # 
 #    |------------[turbine]------|
 #    |      |                    |
@@ -35,10 +36,10 @@
 #    |                              |
 #    |--[pipe]--[heater]------------|
 # 
-# models implemented:
+# models written:
 #  - [ ] heat exchanger
 #  - [ ] turbine
-#  - [ ] tank
+#  - [x] tank
 #  - [x] pump
 #  - [x] pipe
 #  - [x] heater
