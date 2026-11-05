@@ -38,7 +38,7 @@
 # 
 # models written:
 #  - [ ] heat exchanger
-#  - [ ] turbine
+#  - [x] turbine
 #  - [x] tank
 #  - [x] pump
 #  - [x] pipe

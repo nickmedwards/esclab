@@ -2,18 +2,18 @@ from esclab.simulate import Component, Model
 from eeslib import fluid_properties
 import numpy as np
 
-class HasFluid(Component):
+class Fluid:
     # default fluid override with set_fluid 
     fluid = 'Water'
     FLUIDS = fluid_properties.get_fluids_list()
 
     def set_fluid(self, f: str):
-        assert f in HasFluid.FLUIDS, f'Fluid ({f}) not found in:\n{HasFluid.FLUIDS}'
+        assert f in Fluid.FLUIDS, f'Fluid ({f}) not found in:\n{Fluid.FLUIDS}'
         self.fluid = f
 
 # ---------------------------------------------------------------------
 
-class Pump(HasFluid):
+class Pump(Fluid):
     S = Component.Parameter(350)
 
     m_dot_in = Component.Input()
@@ -34,23 +34,24 @@ class Pump(HasFluid):
             self.m_dot_out = self.W_pump**0.5 / self.S
         
         if self.coupled_eqs is not None:
-
+            # short name
+            _src = self.coupled_eqs.source
             # Power and mass flow relationship
             self.coupled_eqs.add_equation({
-                    self.m_dot_out: 1,
-                }, rhs=self.W_pump**0.5 / self.S)
+                self.m_dot_out: 1,
+            }, rhs=self.W_pump**0.5 / self.S)
             
             # energy conservation
             # T_out = T_in + W / (m_dot_out * cp(T_out))
             self.coupled_eqs.add_equation({
-                    self.T_out: 1,
-                    self.coupled_eqs.source(self.T_in): -1,
-                }, rhs=self.W_pump / (self.m_dot_out * self.cp)) # TODO: make this a call to a HasFluid function 
+                self.T_out:       1,
+                _src(self.T_in): -1,
+            }, rhs=self.W_pump / (self.m_dot_out * self.cp)) # TODO: make this a call to a Fluid function 
         pass
 
 # ---------------------------------------------------------------------
 
-class Pipe(HasFluid):
+class Pipe(Fluid):
     D         = Component.Parameter(0.05)
     L         = Component.Parameter(10.)
     h_ext     = Component.Parameter(10.)
@@ -79,11 +80,13 @@ class Pipe(HasFluid):
             self.m_dot_out = self.m_dot_in
 
         if self.coupled_eqs is not None:
+            # short name
+            _src = self.coupled_eqs.source
             # mass conservation
             self.coupled_eqs.add_equation({
-                    self.m_dot_out: 1,
-                    self.coupled_eqs.source(self.m_dot_in): -1,
-                }, rhs=0.)
+                self.m_dot_out:       1,
+                _src(self.m_dot_in): -1,
+            }, rhs=0.)
             
             # energy conservation
             # Positive Q_loss removes energy from the fluid.
@@ -94,7 +97,7 @@ class Pipe(HasFluid):
             m0 = self.m_dot_out
             Ti0 = self.T_in
             To0 = self.T_out
-            # TODO: make this a call to a HasFluid function
+            # TODO: make this a call to a Fluid function
             cp = self.cp
             H = self.h_ext * self.A
 
@@ -109,9 +112,9 @@ class Pipe(HasFluid):
             drdTo =  m0 * cp + H / 2.0
 
             self.coupled_eqs.add_equation({
-                self.m_dot_out: drdm,
-                self.coupled_eqs.source(self.T_in): drdTi,
-                self.T_out: drdTo,
+                self.m_dot_out:  drdm,
+                _src(self.T_in): drdTi,
+                self.T_out:      drdTo,
             }, rhs=drdm * m0 + drdTi * Ti0 + drdTo * To0 - R0)
         # ------
 
@@ -123,7 +126,7 @@ class Pipe(HasFluid):
     
 # ---------------------------------------------------------------------
 
-class TeeOut(HasFluid):
+class TeeOut(Fluid):
     m_dot_in = Component.Input()
     T_in     = Component.Input()
 
@@ -133,22 +136,24 @@ class TeeOut(HasFluid):
     
     def calculate(self):
         if self.coupled_eqs is not None:
+            # short name
+            _src = self.coupled_eqs.source
             # mass conservation
             self.coupled_eqs.add_equation({
-                    self.m_dot_out_1: 1,
-                    self.m_dot_out_2: 1,
-                    self.coupled_eqs.source(self.m_dot_in): -1,
-                }, rhs=0.)
+                self.m_dot_out_1:     1,
+                self.m_dot_out_2:     1,
+                _src(self.m_dot_in): -1,
+            }, rhs=0.)
             # T_out = T_in (assuming no heat loss in the tee)
             self.coupled_eqs.add_equation({
-                    self.T_out: 1,
-                    self.coupled_eqs.source(self.T_in): -1,
-                }, rhs=0.)
+                self.T_out:       1,
+                _src(self.T_in): -1,
+            }, rhs=0.)
         pass
 
 # ---------------------------------------------------------------------
 
-class TeeReturn(HasFluid):
+class TeeReturn(Fluid):
     m_dot_in_1 = Component.Input()
     m_dot_in_2 = Component.Input()
     T_in_1     = Component.Input()
@@ -162,33 +167,34 @@ class TeeReturn(HasFluid):
 
     def calculate(self):
         if self.coupled_eqs is not None:
-
+            # short name
+            _src = self.coupled_eqs.source
             # mass conservation
             self.coupled_eqs.add_equation({
-                    self.m_dot_out: 1,
-                    self.coupled_eqs.source(self.m_dot_in_1): -1,
-                    self.coupled_eqs.source(self.m_dot_in_2): -1,
-                }, rhs=0.)
+                self.m_dot_out:         1,
+                _src(self.m_dot_in_1): -1,
+                _src(self.m_dot_in_2): -1,
+            }, rhs=0.)
             # energy conservation
             # m_dot_out*T_out = (m_dot_1*T_in_1 + m_dot_2*T_in_2) (assuming no heat loss in the tee)
             self.coupled_eqs.add_equation({
-                    self.T_out: self.m_dot_out,
-                    self.coupled_eqs.source(self.T_in_1): -self.m_dot_in_1,
-                    self.coupled_eqs.source(self.T_in_2): -self.m_dot_in_2,
-                }, rhs=0.)
+                self.T_out:         self.m_dot_out,
+                _src(self.T_in_1): -self.m_dot_in_1,
+                _src(self.T_in_2): -self.m_dot_in_2,
+            }, rhs=0.)
 
             # Control choice: relate outlet temperatures from each branch
             self.coupled_eqs.add_equation({
-                    self.coupled_eqs.source(self.T_in_1): 1,
-                    self.coupled_eqs.source(self.T_in_2): -1,
-                }, rhs=2.)
+                _src(self.T_in_1):  1,
+                _src(self.T_in_2): -1,
+            }, rhs=2.)
 
         # Report residuals
         self.m_res = (
             self.m_dot_out - self.m_dot_in_1 - self.m_dot_in_2
         )
 
-        # TODO: make this a call to a HasFluid function
+        # TODO: make this a call to a Fluid function
         self.E_res = self.cp * (
             self.m_dot_out * self.T_out
             - self.m_dot_in_1 * self.T_in_1
@@ -198,7 +204,7 @@ class TeeReturn(HasFluid):
 
 # ---------------------------------------------------------------------
 
-class Tank(HasFluid):
+class Tank(Fluid):
     """
     Model the temperature and fill volume of a tank storing an incompressible fluid.
     """
@@ -223,9 +229,9 @@ class Tank(HasFluid):
         self.T = self.T_init
 
         # Add defaults to outputs to avoid nan's
-        self.dT.v = 0.
-        self.dm.v = 0.
-        self.T_out.v = self.T_init
+        self.dT.v      = 0.
+        self.dm.v      = 0.
+        self.T_out.v   = self.T_init
         self.m_final.v = self.m_init
         
     def calculate(self):
@@ -273,6 +279,8 @@ class Tank(HasFluid):
         """
 
         if self.coupled_eqs is not None:
+            # short name
+            _src = self.coupled_eqs.source
             # Get the timestep
             dt = self.model.settings.timestep
             # short names
@@ -287,9 +295,9 @@ class Tank(HasFluid):
             # mass balance
             # m_dot_in - m_dot_out - m/dt = m0/dt
             self.coupled_eqs.add_equation({
-                self.coupled_eqs.source(self.m_dot_in): 1,
-                self.coupled_eqs.source(self.m_dot_out): -1,
-                self.m_final: -1/dt,
+                _src(self.m_dot_in):   1,
+                _src(self.m_dot_out): -1,
+                self.m_final:         -1/dt,
             }, rhs = m0/dt)
 
             dR_dmo = T0
@@ -307,13 +315,13 @@ class Tank(HasFluid):
             # dR/dmo*mo + dR/dTi*Ti + dR/dmi*mi + dR/dT*T + dR/dm*m + dR/ddT*dT + dR/ddm*dm
             # = -R(x0) + dR/dmo*mo0 + dR/dTi*Ti0 + dR/dmi*mi0 + dR/dT*T0 + dR/dm*m0 + dR/ddT*dT0 + dR/ddm*dm0
             self.coupled_eqs.add_equation({
-                self.coupled_eqs.source(self.m_dot_out): dR_dmo,
-                self.coupled_eqs.source(self.T_in): dR_dTi,
-                self.coupled_eqs.source(self.m_dot_in): dR_dmi,
-                self.T_out: dR_dT,
-                self.m_final: dR_dm,
-                self.dT: dR_ddT,
-                self.dm: dR_ddm,
+                _src(self.m_dot_out): dR_dmo,
+                _src(self.T_in):      dR_dTi,
+                _src(self.m_dot_in):  dR_dmi,
+                self.T_out:           dR_dT,
+                self.m_final:         dR_dm,
+                self.dT:              dR_ddT,
+                self.dm:              dR_ddm,
             }, rhs = -R0 + dR_dmo*mo0 + dR_dTi*Ti0 + dR_dmi*mi0 + dR_dT*T0 + dR_dm*m0 + dR_ddT*dT0 + dR_ddm*dm0)
 
 
@@ -340,12 +348,13 @@ class Tank(HasFluid):
 
 # ---------------------------------------------------------------------
 
-class Turbine(HasFluid):
+class Turbine(Fluid):
     eta_s    = Component.Parameter(0.9)
     PR       = Component.Parameter(4.0)
     mdot_in  = Component.Input()
     T_in     = Component.Input()
     P_in     = Component.Input()
+    h_in     = Component.Output() # added for use in network equation of energy balance
     h_out    = Component.Output()
     T_out    = Component.Output()
     P_out    = Component.Output()
@@ -358,18 +367,122 @@ class Turbine(HasFluid):
 
         Mass balance: 
             mdot_out - mdot_in = 0
-        
+            mdot_out = mdot_in = m
+
+        Efficiency relationship:
+            h_out = h_in - (h_in-h_out_s)*eta_s
+            h_out = (1 - eta_s) * h_in + eta_s * h_out_s
+            h_out - (1 - eta_s) * h_in = eta_s * h_out_s
+
         Energy balance:
-            W = mdot_in*(h_in - h_out)
+            W = m*(h_in - h_out)
+
+            R(x) = W - m*(h_in - h_out)
+            x    = [W,  m,  h_in, h_out]
+            x0   = [W0, m0, hi0,  ho0]
+            R(x0) = W0 - m0*(hi0 - ho0)
+
+            R(x0) + dR/dW(W-W0) + dR/dm(m-m0) + dR/dhi(hi-hi0) + dR/dho(ho-ho0) = 0
+
+        Reorganizing:
+            dR/dW*W + dR/dm*m + dR/dhi*hi + dR/dho*ho = -R(x0) + dR/dW*W0 + dR/dm*m0 + dR/dhi*hi0 + dR/dho*ho0
+
+        Approximating derivatives at x0:
+            dR/dW  = 1
+            dR/dm  = -(hi0 - ho0)
+            dR/dhi = -m0
+            dR/dho = m0
         """
-        self.mdot_out = self.mdot_in
-        h_in = fluid_properties.enthalpy(self.fluid, T=self.T_in, P=self.P_in)
-        s_in = fluid_properties.entropy(self.fluid, T=self.T_in, P=self.P_in)
+
+        # determine inlet and isentropic properties
         self.P_out = self.P_in / self.model.design.PR
-        h_out_s = fluid_properties.enthalpy(self.fluid,P=self.P_out, s=s_in)
-        self.h_out = h_in - (h_in-h_out_s)*self.eta_s
+        self.h_in  = fluid_properties.enthalpy(self.fluid, T=self.T_in, P=self.P_in)
+        s_in       = fluid_properties.entropy(self.fluid, T=self.T_in, P=self.P_in)
+        h_out_s    = fluid_properties.enthalpy(self.fluid, P=self.P_out, s=s_in)
+
+        if self.coupled_eqs is not None:
+            # short name
+            _src = self.coupled_eqs.source
+
+            # mass conservation
+            self.coupled_eqs.add_equation({
+                self.m_dot_out: 1,
+                _src(self.m_dot_in): -1,
+            }, rhs=0.)
+
+            # efficency relationship
+            self.coupled_eqs.add_equation({
+                self.h_out: 1,
+                self.h_in: -(1 - self.eta_s),
+            }, rhs=self.eta_s * h_out_s)
+
+            # energy conservation
+            # short names
+            m0  = self.mdot_in.v
+            hi0 = self.h_in.v
+            ho0 = self.h_out.v
+            W0  = self.W.v
+
+            # R(x0) = W0 - m0*(hi0 - ho0)
+            R0 = W0 - m0*(hi0 - ho0)
+
+            # Derivatives of the residual.
+            dR_dW  = 1
+            dR_dm  = -(hi0 - ho0)
+            dR_dhi = -m0
+            dR_dho = m0
+
+            self.coupled_eqs.add_equation({
+                self.W:     dR_dW,
+                self.m_dot: dR_dm,
+                self.h_in:  dR_dhi,
+                self.h_out: dR_dho
+            }, rhs=-R0 + dR_dW*W0 + dR_dm*m0 + dR_dhi*hi0 + dR_dho*ho0)
+
+        # compute other outputs
         self.T_out = fluid_properties.temperature(self.fluid, P=self.P_out, h=self.h_out)
-        self.W = (h_in - self.h_out)*self.mdot_in        
+
+        # self.mdot_out = self.mdot_in
+        # h_in = fluid_properties.enthalpy(self.fluid, T=self.T_in, P=self.P_in)
+        # s_in = fluid_properties.entropy(self.fluid, T=self.T_in, P=self.P_in)
+        # self.P_out = self.P_in / self.model.design.PR
+        # h_out_s = fluid_properties.enthalpy(self.fluid,P=self.P_out, s=s_in)
+        # self.h_out = h_in - (h_in-h_out_s)*self.eta_s
+        # self.T_out = fluid_properties.temperature(self.fluid, P=self.P_out, h=self.h_out)
+        # self.W = (h_in - self.h_out)*self.mdot_in        
         return 
+
+# ---------------------------------------------------------------------
+
+class HeatExchanger:
+    UA = Component.Parameter(1000.)
+    N  = Component.Parameter(10.) # number of passes
+
+    P_in_shell  = Component.Input()
+    P_in_tube   = Component.Input()
+    T_in_shell  = Component.Input()
+    T_in_tube   = Component.Input()
+    m_dot_shell = Component.Input()
+    m_dot_tube  = Component.Input()
+
+    T_out_shell = Component.Output()
+    T_out_tube  = Component.Output()
+    q           = Component.Output()
+
+    def presim_setup(self, **kwargs):
+        self.shell = Fluid()
+        self.tube  = Fluid()
+
+    def calculate(self):
+        # determine effectiveness
+        # frac_1 = 1 + exp(-NTU_1 * sqrt(1 + C_r^2)) / 1 - exp(-NTU_1 * sqrt(1 + C_r^2))
+        # epsilon_1 = 2 * (1 + C_r * sqrt(1 + C_r^2) * frac_1) ^ -1
+        # frac_2 = (1 - epsilon_1 * C_r) / (1 - epsilon_1)
+        # epsilon = (frac_2 ^ N - 1) / (frac_2 ^ N - C_r)
+
+        # determine outputs
+        # q = epsilon * Cmin * (T_hot_in - T_cold_in)
+        # T_out_hot = T_hot_in - q / (C_hot)
+        pass
 
 # ---------------------------------------------------------------------
