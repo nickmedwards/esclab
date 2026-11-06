@@ -195,9 +195,10 @@ class Scheduler(Component):
 
         nt = len(self.price_schedule)
         T = range(nt)
-        qmax = self.storage_capacity * self.c_rate / convert('hr','s')  # W
-        smax = self.storage_capacity
-        S0 = self.last_charge_state
+        # Pass numeric scalars to Gurobi, not iterable ESCLab I/O wrappers.
+        smax = float(self.storage_capacity)
+        qmax = smax * float(self.c_rate) / convert('hr','s')  # W
+        S0 = float(self.last_charge_state)
         
         # Optimization Model
         om = gp.Model('storage_optimization')
@@ -209,15 +210,15 @@ class Scheduler(Component):
         s = om.addVars(T, lb=0., ub=smax, name='s')  # storage inventory
 
         # Objective function
-        eta = self.consumer_efficiency
-        om.setObjective(gp.quicksum(q_out[t]*eta*self.price_schedule[t]*model.settings.timestep for t in T), GRB.MAXIMIZE)
+        eta = float(self.consumer_efficiency)
+        om.setObjective(gp.quicksum(q_out[t]*eta*self.price_schedule[t]*self.model.settings.timestep for t in T), GRB.MAXIMIZE)
         
         # ------------ Constraints
         # flow in is no greater than available flow in 
         om.addConstrs((q_in[t] <= self.charge_schedule[t] for t in T), 'flow_utilized')
 
         # energy balance on storage based on power consumed
-        om.addConstrs((s[t] == (s[t-1] if t>0 else S0) - (q_out[t] - q_in[t])*model.settings.timestep for t in T), 'store_balance')
+        om.addConstrs((s[t] == (s[t-1] if t>0 else S0) - (q_out[t] - q_in[t])*self.model.settings.timestep for t in T), 'store_balance')
 
         om.optimize()
 
