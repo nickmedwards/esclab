@@ -11,6 +11,12 @@ class Fluid:
         assert f in Fluid.FLUIDS, f'Fluid ({f}) not found in:\n{Fluid.FLUIDS}'
         self.fluid = f
 
+# something like
+for fn in fluid_properties.__dict__:
+    attr = getattr(fluid_properties, fn)
+    if callable(attr):
+        setattr(Fluid, fn, attr)
+
 # ---------------------------------------------------------------------
 
 class Pump(Fluid):
@@ -475,14 +481,58 @@ class HeatExchanger:
 
     def calculate(self):
         # determine effectiveness
+        c_dot_shell = self.m_dot_shell.v * fluid_properties.specheat(self.shell.fluid, T=self.T_in_shell.v, P=self.P_in_shell.v)
+        c_dot_tube  = self.m_dot_tube.v  * fluid_properties.specheat(self.tube.fluid,  T=self.T_in_tube.v,  P=self.P_in_tube.v)
+
+        C_min = min(c_dot_shell, c_dot_tube)
+        C_r = C_min / max(c_dot_shell, c_dot_tube)
+        NTU_1 = self.UA.v / C_min
+
         # frac_1 = 1 + exp(-NTU_1 * sqrt(1 + C_r^2)) / 1 - exp(-NTU_1 * sqrt(1 + C_r^2))
+        sqrt_C_r2 = np.sqrt(1 + C_r**2)
+        frac_1 = (1 + np.exp(-NTU_1 * sqrt_C_r2)) /\
+                 (1 - np.exp(-NTU_1 * sqrt_C_r2))
         # epsilon_1 = 2 * (1 + C_r * sqrt(1 + C_r^2) * frac_1) ^ -1
+        epsilon_1 = 2 / (1 + C_r * sqrt_C_r2 * frac_1)
         # frac_2 = (1 - epsilon_1 * C_r) / (1 - epsilon_1)
         # epsilon = (frac_2 ^ N - 1) / (frac_2 ^ N - C_r)
+        frac_2N = ((1 - epsilon_1 * C_r) / (1 - epsilon_1))**self.N.v
+        epsilon = (frac_2N - 1) / (frac_2N - C_r)
 
         # determine outputs
-        # q = epsilon * Cmin * (T_hot_in - T_cold_in)
-        # T_out_hot = T_hot_in - q / (C_hot)
-        pass
+        if self.coupled_eqs is not None:
+            # short name
+            _src = self.coupled_eqs.source
+
+            # q = epsilon * Cmin * (T_hot_in - T_cold_in)
+            # q - epsilon * Cmin * T_hot_in + epsilon * Cmin * T_cold_in = 0
+            shell_hot = -1 if self.T_in_shell.v > self.T_in_tube.v else 1
+            self.coupled_eqs.add_equation({
+                self.q:                1,
+                _src(self.T_in_shell): shell_hot * epsilon * C_min,
+                _src(self.T_in_tube): -shell_hot * epsilon * C_min,
+            }, rhs = 0)
+
+            # T_out_hot = T_hot_in - q / (C_hot)
+            # T_out_cold = T_cold_in + q / (C_cold)
+            # ->
+            # shell_hot == -1 if shell is hot otherwise == 1
+            # T_out_shell = T_in_shell + shell_hot * q / (C_shell)
+            # T_out_tube  = T_in_tube  - shell_hot * q / (C_tube)
+            # ->
+            # T_out_shell - T_in_shell - shell_hot * q / (C_shell) = 0
+            # T_out_tube  - T_in_tube  + shell_hot * q / (C_tube)  = 0
+            self.coupled_eqs.add_equation({
+                self.T_out_shell:       1,
+                _src(self.T_in_shell): -1,
+                self.q:                -shell_hot / c_dot_shell,
+            }, rhs = 0)
+            self.coupled_eqs.add_equation({
+                self.T_out_tube:       1,
+                _src(self.T_in_tube): -1,
+                self.q:                shell_hot / c_dot_tube,
+            }, rhs = 0) 
+
+        return
 
 # ---------------------------------------------------------------------
