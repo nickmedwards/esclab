@@ -19,7 +19,7 @@ for fn in fluid_properties.__dict__:
 
 # ---------------------------------------------------------------------
 
-class Pump(Fluid):
+class Pump(Component, Fluid):
     S = Component.Parameter(350)
 
     m_dot_in = Component.Input()
@@ -57,7 +57,7 @@ class Pump(Fluid):
 
 # ---------------------------------------------------------------------
 
-class Pipe(Fluid):
+class Pipe(Component, Fluid):
     D         = Component.Parameter(0.05)
     L         = Component.Parameter(10.)
     h_ext     = Component.Parameter(10.)
@@ -132,7 +132,7 @@ class Pipe(Fluid):
     
 # ---------------------------------------------------------------------
 
-class TeeOut(Fluid):
+class TeeOut(Component, Fluid):
     m_dot_in = Component.Input()
     T_in     = Component.Input()
 
@@ -159,7 +159,7 @@ class TeeOut(Fluid):
 
 # ---------------------------------------------------------------------
 
-class TeeReturn(Fluid):
+class TeeReturn(Component, Fluid):
     m_dot_in_1 = Component.Input()
     m_dot_in_2 = Component.Input()
     T_in_1     = Component.Input()
@@ -210,7 +210,7 @@ class TeeReturn(Fluid):
 
 # ---------------------------------------------------------------------
 
-class Tank(Fluid):
+class Tank(Component, Fluid):
     """
     Model the temperature and fill volume of a tank storing an incompressible fluid.
     """
@@ -354,12 +354,14 @@ class Tank(Fluid):
 
 # ---------------------------------------------------------------------
 
-class Turbine(Fluid):
+class Turbine(Component, Fluid):
     eta_s    = Component.Parameter(0.9)
     PR       = Component.Parameter(4.0)
+    
     mdot_in  = Component.Input()
     T_in     = Component.Input()
     P_in     = Component.Input()
+    
     h_in     = Component.Output() # added for use in network equation of energy balance
     h_out    = Component.Output()
     T_out    = Component.Output()
@@ -460,7 +462,7 @@ class Turbine(Fluid):
 
 # ---------------------------------------------------------------------
 
-class HeatExchanger:
+class HeatExchanger(Component):
     UA = Component.Parameter(1000.)
     N  = Component.Parameter(10.) # number of passes
 
@@ -471,9 +473,11 @@ class HeatExchanger:
     m_dot_shell = Component.Input()
     m_dot_tube  = Component.Input()
 
-    T_out_shell = Component.Output()
-    T_out_tube  = Component.Output()
-    q           = Component.Output()
+    m_dot_out_shell = Component.Output()
+    m_dot_out_tube  = Component.Output()
+    T_out_shell     = Component.Output()
+    T_out_tube      = Component.Output()
+    q               = Component.Output()
 
     def presim_setup(self, **kwargs):
         self.shell = Fluid()
@@ -481,6 +485,7 @@ class HeatExchanger:
 
     def calculate(self):
         # determine effectiveness
+        # TODO: call to Fluid function
         c_dot_shell = self.m_dot_shell.v * fluid_properties.specheat(self.shell.fluid, T=self.T_in_shell.v, P=self.P_in_shell.v)
         c_dot_tube  = self.m_dot_tube.v  * fluid_properties.specheat(self.tube.fluid,  T=self.T_in_tube.v,  P=self.P_in_tube.v)
 
@@ -504,6 +509,16 @@ class HeatExchanger:
             # short name
             _src = self.coupled_eqs.source
 
+            # mass conservation
+            self.coupled_eqs.add_equation({
+                self.m_dot_out_shell:    1,
+                _src(self.m_dot_shell): -1,
+            }, rhs = 0)
+            self.coupled_eqs.add_equation({
+                self.m_dot_out_tube:    1,
+                _src(self.m_dot_tube): -1,
+            }, rhs = 0)
+
             # q = epsilon * Cmin * (T_hot_in - T_cold_in)
             # q - epsilon * Cmin * T_hot_in + epsilon * Cmin * T_cold_in = 0
             shell_hot = -1 if self.T_in_shell.v > self.T_in_tube.v else 1
@@ -513,10 +528,10 @@ class HeatExchanger:
                 _src(self.T_in_tube): -shell_hot * epsilon * C_min,
             }, rhs = 0)
 
-            # T_out_hot = T_hot_in - q / (C_hot)
+            # T_out_hot  = T_hot_in  - q / (C_hot)
             # T_out_cold = T_cold_in + q / (C_cold)
             # ->
-            # shell_hot == -1 if shell is hot otherwise == 1
+            # shell_hot == -1 if shell is hot otherwise == 1z
             # T_out_shell = T_in_shell + shell_hot * q / (C_shell)
             # T_out_tube  = T_in_tube  - shell_hot * q / (C_tube)
             # ->
@@ -534,5 +549,49 @@ class HeatExchanger:
             }, rhs = 0) 
 
         return
+
+# ---------------------------------------------------------------------
+
+class Heater(Component, Fluid):
+    # c         = Component.Parameter(1000.) # J/kg-K
+    q_dot     = Component.Parameter(3000.) # W
+    ramp_time = Component.Parameter(300.) # s
+
+    T_in     = Component.Input()
+    m_dot_in = Component.Input()
+
+    T_out         = Component.Output()
+    m_dot_out     = Component.Output()
+    q_dot_current = Component.Output()
+
+    def update_q_state(self):
+        if self.model.time > self.ramp_time:
+            self.q_dot_current = self.q_dot
+        else:
+            self.q_dot_current = self.q_dot * (self.model.time / self.ramp_time)
+
+    def calculate(self):
+        # heat is set based on time so no need to add to network equations
+        self.update_q_state()
+
+        if self.coupled_eqs is not None:
+            # short name
+            _src = self.coupled_eqs.source
+
+            # mass conservation
+            self.coupled_eqs.add_equation({
+                self.m_dot_out:       1,
+                _src(self.m_dot_in): -1,
+            }, rhs = 0.)
+
+            # energy conservation
+            self.coupled_eqs.add_equation({
+                self.T_out:       1,
+                _src(self.T_in): -1,
+                self.q_dot_current: -1 / (self.m_dot_in * self.c), # TODO: call to Fluid function
+            }, rhs = 0.)
+
+        # self.T_out = self.T_in + self.q_dot_current / (self.m_dot_in * self.c)
+        # self.m_dot_out = self.m_dot_in
 
 # ---------------------------------------------------------------------
