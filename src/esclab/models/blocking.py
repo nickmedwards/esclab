@@ -131,4 +131,17 @@ def create_model():
     model.connect(model.HEATER.m_dot_out,     model.PUMP_H.m_dot_in)
     model.connect(model.HEATER.T_out,         model.PUMP_H.T_in)
 
+    model.settings.global_plotter_args = dict(show_live  = False,
+                                            #   time_units = 'days',
+                                              line_styles= '-')
+    model.add_plotter([model.building.T, model.source.T_ambient], y1label='Temperature (degC)')
+
     return model
+
+
+if __name__ == "__main__":
+    model = create_model()
+    while model.time < model.settings.stop_time:
+        model.step()
+    model.finalize()
+    model.wait_for_plots()
