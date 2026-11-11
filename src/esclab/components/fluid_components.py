@@ -22,9 +22,6 @@ for fn in fluid_properties.__dict__:
     if callable(attr):
         setattr(Fluid, fn, fp_wrapper(attr))
 
-test = Fluid()
-print(test.specheat(T=297, P=101325))
-
 # ---------------------------------------------------------------------
 
 class Pump(Component, Fluid):
